@@ -1,0 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&display=swap');
+
+:root {
+  --tv-bg: #0b0b12;
+  --tv-bg-panel: #12121c;
+  --tv-bg-elevated: #1a1a26;
+  --tv-text: #e8e8f0;
+  --tv-text-muted: #6b6b80;
+  --tv-text-dim: #4a4a5e;
+  --tv-border: #1e1e2e;
+  --tv-border-bright: #2a2a3e;
+  --tv-accent: #00d4aa;
+  --tv-accent-secondary: #6366f1;
+  --tv-danger: #ef4444;
+  --tv-warning: #f59e0b;
+  --tv-font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --tv-font-mono: 'JetBrains Mono', monospace;
+  --tv-radius: 8px;
+  --tv-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  --tv-bg-image: none;
+  --tv-bg-size: auto;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--tv-font);
+  background-color: var(--tv-bg);
+  color: var(--tv-text);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+  overflow-x: hidden;
+  transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+a {
+  text-decoration: none;
+  color: var(--tv-accent);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--tv-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--tv-border-bright);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--tv-text-dim);
+}

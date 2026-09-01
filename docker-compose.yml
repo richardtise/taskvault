@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # MongoDB
+  mongodb:
+    image: mongo:7
+    container_name: taskvault-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: changeme
+    networks:
+      - taskvault
+
+  # Redis (for Bull queue)
+  redis:
+    image: redis:7-alpine
+    container_name: taskvault-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - taskvault
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: taskvault-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MONGODB_URI=mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin
+      - REDIS_URL=redis://redis:6379
+      - RPC_URL=https://rpc.testnet.chain.robinhood.com
+      - VAULT_ADDRESS=${VAULT_ADDRESS}
+      - POINTS_ADDRESS=${POINTS_ADDRESS}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_WALLET=${ADMIN_WALLET}
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - taskvault
+
+  # Verifier Bot
+  verifier:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.verifier
+    container_name: taskvault-verifier
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin
+      - RPC_URL=https://rpc.testnet.chain.robinhood.com
+      - VAULT_ADDRESS=${VAULT_ADDRESS}
+      - POINTS_ADDRESS=${POINTS_ADDRESS}
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - ADMIN_WALLET=${ADMIN_WALLET}
+    depends_on:
+      - mongodb
+      - backend
+    networks:
+      - taskvault
+
+  # Frontend (served via nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: taskvault-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - taskvault
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  taskvault:
+    driver: bridge
