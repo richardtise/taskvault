@@ -154,3 +154,92 @@ export function badgeLevelName(level) {
 export function badgeLevelColor(level) {
   return ['var(--tv-text-dim)', '#cd7f32', '#c0c0c0', '#ffd700', '#e5e4e2'][level] || 'var(--tv-text-muted)'
 }
+
+export function useTaskMetrics() {
+  const metrics = useRef({
+    startTime: null,
+    endTime: null,
+    mouseEvents: 0,
+    keyEvents: 0,
+    pasteEvents: 0,
+    tabSwitches: 0,
+    scrollEvents: 0,
+    clickEvents: 0,
+    idleMs: 0,
+    lastActive: null,
+  })
+
+  const listeners = useRef([])
+
+  const track = useCallback(() => {
+    const m = metrics.current
+    m.lastActive = Date.now()
+  }, [])
+
+  const startTracking = useCallback(() => {
+    const m = metrics.current
+    m.startTime = Date.now()
+    m.lastActive = Date.now()
+    m.endTime = null
+    m.mouseEvents = 0
+    m.keyEvents = 0
+    m.pasteEvents = 0
+    m.tabSwitches = 0
+    m.scrollEvents = 0
+    m.clickEvents = 0
+    m.idleMs = 0
+
+    const handlers = {
+      mousemove: () => { metrics.current.mouseEvents++; track() },
+      mousedown: () => { metrics.current.clickEvents++; track() },
+      keydown: () => { metrics.current.keyEvents++; track() },
+      scroll: () => { metrics.current.scrollEvents++; track() },
+      paste: () => { metrics.current.pasteEvents++; track() },
+      visibilitychange: () => {
+        if (document.hidden) {
+          metrics.current.tabSwitches++
+        }
+      },
+    }
+
+    Object.entries(handlers).forEach(([event, fn]) => {
+      window.addEventListener(event, fn, { passive: true })
+      listeners.current.push({ event, fn })
+    })
+
+    // Idle timer
+    const idleInterval = setInterval(() => {
+      const now = Date.now()
+      if (now - metrics.current.lastActive > 5000) {
+        metrics.current.idleMs += 1000
+      }
+    }, 1000)
+    listeners.current.push({ clear: () => clearInterval(idleInterval) })
+  }, [track])
+
+  const stopTracking = useCallback(() => {
+    metrics.current.endTime = Date.now()
+    listeners.current.forEach(l => {
+      if (l.event) window.removeEventListener(l.event, l.fn)
+      if (l.clear) l.clear()
+    })
+    listeners.current = []
+  }, [])
+
+  const getMetrics = useCallback(() => {
+    const m = metrics.current
+    return {
+      timeSpentMs: m.endTime ? m.endTime - m.startTime : Date.now() - m.startTime,
+      mouseEvents: m.mouseEvents,
+      keyEvents: m.keyEvents,
+      pasteEvents: m.pasteEvents,
+      tabSwitches: m.tabSwitches,
+      scrollEvents: m.scrollEvents,
+      clickEvents: m.clickEvents,
+      idleMs: m.idleMs,
+      activeMs: (m.endTime || Date.now()) - m.startTime - m.idleMs,
+    }
+  }, [])
+
+  return { startTracking, stopTracking, getMetrics }
+}

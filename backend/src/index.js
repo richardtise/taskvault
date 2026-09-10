@@ -4,6 +4,8 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
+const appealRoutes = require('./routes/appeals');
+const verification = require('./services/verification');
 const cron = require('node-cron');
 require('dotenv').config();
 
@@ -63,6 +65,8 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+app.use('/api/appeals', appealRoutes);
+
 // Database connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/taskvault')
   .then(() => logger.info('Connected to MongoDB'))
@@ -89,6 +93,29 @@ cron.schedule('0 0 * * *', async () => {
     logger.info('Daily stats computed and saved');
   } catch (error) {
     logger.error(`Daily stats cron error: ${error.message}`);
+  }
+});
+//Reputation cron
+cron.schedule ('0 2 * * *', async()=> {
+  try{
+    const users = awaitUser.find({banned: false, tasksCompleted: { $gt: 0} });
+    logger.info('Recalculating reputation for ${users.length} users');
+
+    for (const user of users) {
+      const rep = await verification.calculateReputation(user.walletAddress);
+      await User.updateOne(
+        {walletAddress: user.walletAddress},
+        {
+          $set: {
+            accuracy: rep.accuracy,
+            //tierIndex: rep.tier //uncomment when ready to auto-promote
+          }
+        }
+      );
+    }
+    logger.info('Reputation recalculation complete');
+  } catch (error){
+    logger.error ('Reputation cron error: ${error.message}');
   }
 });
 

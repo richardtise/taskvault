@@ -24,7 +24,6 @@ router.get('/', async (req, res) => {
     if (category) query.category = category;
     if (difficulty) query.difficulty = difficulty;
 
-    // If wallet provided, filter by access level
     if (walletAddress) {
       const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
       if (user) {
@@ -36,7 +35,7 @@ router.get('/', async (req, res) => {
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
-      .select('-taskData'); // Don't send full task data in list
+      .select('-taskData');
 
     const total = await Task.countDocuments(query);
 
@@ -63,7 +62,6 @@ router.get('/:taskId', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
 
-    // Check access
     const canAccess = await blockchain.canAccessTask(
       req.user.walletAddress,
       task.requiredTier,
@@ -80,7 +78,6 @@ router.get('/:taskId', authMiddleware, async (req, res) => {
       });
     }
 
-    // Check if already submitted
     const existingSubmission = await Submission.findOne({
       taskId: req.params.taskId,
       userAddress: req.user.walletAddress
@@ -100,7 +97,7 @@ router.get('/:taskId', authMiddleware, async (req, res) => {
 // POST /api/tasks/:taskId/submit — Submit task work
 router.post('/:taskId/submit', authMiddleware, async (req, res) => {
   try {
-    const { answer, timeSpentSeconds } = req.body;
+    const { answer, timeSpentSeconds, metrics } = req.body;
     const task = await Task.findOne({ taskId: req.params.taskId });
 
     if (!task) {
@@ -115,7 +112,6 @@ router.post('/:taskId/submit', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Task quota reached' });
     }
 
-    // Check for existing submission
     const existing = await Submission.findOne({
       taskId: req.params.taskId,
       userAddress: req.user.walletAddress
@@ -125,25 +121,34 @@ router.post('/:taskId/submit', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Already submitted' });
     }
 
-    // Create submission
+    // Anti-gaming: immediate rejection before DB save
+    if (metrics) {
+      const minTime = task.estimatedTimeMinutes ? task.estimatedTimeMinutes * 0.3 * 60000 : 5000;
+      if (metrics.timeSpentMs < minTime) {
+        return res.status(400).json({ error: 'Submission too fast. Please take your time.' });
+      }
+      if (metrics.pasteEvents > 0 && ['writing-eval', 'safety-redteam', 'audio-transcribe'].includes(task.category)) {
+        return res.status(400).json({ error: 'Paste detected. Type your own response.' });
+      }
+    }
+
     const submission = new Submission({
       taskId: req.params.taskId,
       userAddress: req.user.walletAddress,
       answer,
       timeSpentSeconds,
+      metrics: metrics || {},
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'],
     });
 
     await submission.save();
 
-    // Update task completion count
     await Task.updateOne(
       { taskId: req.params.taskId },
       { $inc: { currentCompletions: 1 } }
     );
 
-    // Update user last active
     await User.updateOne(
       { walletAddress: req.user.walletAddress },
       { lastActive: new Date() }

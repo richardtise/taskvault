@@ -4,7 +4,7 @@ const UserSchema = new mongoose.Schema({
   walletAddress: { type: String, required: true, unique: true, lowercase: true },
   username: { type: String, unique: true, sparse: true },
   email: { type: String, unique: true, sparse: true },
-  avatar: { type: String }, // IPFS hash
+  avatar: { type: String },
   bio: { type: String, maxlength: 500 },
 
   // On-chain sync (cached for fast queries)
@@ -18,7 +18,7 @@ const UserSchema = new mongoose.Schema({
   // Modality badges cache
   badges: [{
     modality: String,
-    level: { type: Number, default: 0 }, // 0=None, 1=Bronze, 2=Silver, 3=Gold, 4=Platinum
+    level: { type: Number, default: 0 },
     tasksCompleted: { type: Number, default: 0 },
     lastSynced: { type: Date, default: Date.now }
   }],
@@ -35,6 +35,9 @@ const UserSchema = new mongoose.Schema({
   deviceFingerprint: { type: String },
   flagged: { type: Boolean, default: false },
   flagReason: { type: String },
+  strikes: { type: Number, default: 0 },
+  banned: { type: Boolean, default: false },
+  lastFlagged: { type: Date },
 
   // Timestamps
   createdAt: { type: Date, default: Date.now },
@@ -43,7 +46,7 @@ const UserSchema = new mongoose.Schema({
 });
 
 UserSchema.index({ walletAddress: 1 });
-UserSchema.index({ tierIndex: -1, totalPoints: -1 }); // Leaderboard queries
+UserSchema.index({ tierIndex: -1, totalPoints: -1 });
 UserSchema.index({ 'badges.modality': 1, 'badges.level': -1 });
 
 module.exports = mongoose.model('User', UserSchema);

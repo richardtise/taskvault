@@ -6,7 +6,7 @@ const SubmissionSchema = new mongoose.Schema({
   userAddress: { type: String, required: true, lowercase: true, index: true },
 
   // Content
-  answer: { type: mongoose.Schema.Types.Mixed, required: true }, // Flexible: text, JSON, file refs
+  answer: { type: mongoose.Schema.Types.Mixed, required: true },
   files: [{ 
     cid: String, 
     url: String, 
@@ -19,6 +19,19 @@ const SubmissionSchema = new mongoose.Schema({
   ipAddress: { type: String },
   userAgent: { type: String },
 
+  // Behavioral metrics (anti-gaming)
+  metrics: {
+    timeSpentMs: { type: Number },
+    mouseEvents: { type: Number },
+    keyEvents: { type: Number },
+    pasteEvents: { type: Number },
+    tabSwitches: { type: Number },
+    scrollEvents: { type: Number },
+    clickEvents: { type: Number },
+    idleMs: { type: Number },
+    activeMs: { type: Number },
+  },
+
   // Review
   status: { 
     type: String, 
@@ -29,8 +42,8 @@ const SubmissionSchema = new mongoose.Schema({
   // Verification
   verifierAddress: { type: String, lowercase: true },
   verificationNotes: { type: String },
-  verificationScore: { type: Number }, // 0-100 quality score
-  correct: { type: Boolean }, // true = approved, false = rejected
+  verificationScore: { type: Number },
+  correct: { type: Boolean },
 
   // Consensus (for peer-reviewed tasks)
   peerReviews: [{
@@ -42,7 +55,7 @@ const SubmissionSchema = new mongoose.Schema({
   consensusScore: { type: Number },
 
   // On-chain
-  txHash: { type: String }, // completeTask transaction hash
+  txHash: { type: String },
   pointsAwarded: { type: Number },
 
   // Dispute
@@ -55,7 +68,7 @@ const SubmissionSchema = new mongoose.Schema({
   reviewedAt: { type: Date },
 });
 
-SubmissionSchema.index({ taskId: 1, userAddress: 1 }, { unique: true }); // One submission per user per task
+SubmissionSchema.index({ taskId: 1, userAddress: 1 }, { unique: true });
 SubmissionSchema.index({ status: 1, createdAt: 1 });
 SubmissionSchema.index({ userAddress: 1, status: 1 });
 

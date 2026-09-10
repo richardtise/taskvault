@@ -1,32 +1,81 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from './ThemeProvider';
 import { TASK_GENRES, THEMES } from '../themes';
+import { useTaskMetrics } from '../hooks';
 
 export default function TaskInterface({ task, onClose }) {
   const { setTheme, resetTheme } = useTheme();
   const genre = TASK_GENRES[task.id] || 'default';
+  const { startTracking, stopTracking, getMetrics } = useTaskMetrics();
+  const [answer, setAnswer] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
     setTheme(genre);
-    return () => resetTheme();
+    startTracking();
+    return () => {
+      stopTracking();
+      resetTheme();
+    };
   }, [genre]);
 
-  const renderTaskWorkspace = () => {
+  const handleSubmit = async () => {
+    if (!answer || submitting) return;
+    setSubmitting(true);
+    stopTracking();
+    const metrics = getMetrics();
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('taskvault_token') || ''}`
+        },
+        body: JSON.stringify({
+          answer,
+          timeSpentSeconds: Math.round(metrics.timeSpentMs / 1000),
+          metrics,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setSubmitted(true);
+        setTimeout(() => onClose(), 1500);
+      } else {
+        alert(data.error || 'Submission failed');
+        setSubmitting(false);
+      }
+    } catch (err) {
+      alert('Network error');
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return (
+      <div className="task-interface-overlay" style={{ display: 'grid', placeItems: 'center' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 64, marginBottom: 16 }}>✅</div>
+          <h2 style={{ color: 'var(--tv-text)' }}>Submitted!</h2>
+          <p style={{ color: 'var(--tv-text-muted)' }}>Your work is being verified.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const renderWorkspace = () => {
+    const props = { task, onAnswer: setAnswer, answer };
     switch (genre) {
-      case 'writing':
-        return <WritingWorkspace task={task} />;
-      case 'robotics':
-        return <RoboticsWorkspace task={task} />;
-      case 'llm':
-        return <LLMWorkspace task={task} />;
-      case 'vision':
-        return <VisionWorkspace task={task} />;
-      case 'audio':
-        return <AudioWorkspace task={task} />;
-      case 'safety':
-        return <SafetyWorkspace task={task} />;
-      default:
-        return <GenericWorkspace task={task} />;
+      case 'writing': return <WritingWorkspace {...props} />;
+      case 'robotics': return <RoboticsWorkspace {...props} />;
+      case 'llm': return <LLMWorkspace {...props} />;
+      case 'vision': return <VisionWorkspace {...props} />;
+      case 'audio': return <AudioWorkspace {...props} />;
+      case 'safety': return <SafetyWorkspace {...props} />;
+      default: return <GenericWorkspace {...props} />;
     }
   };
 
@@ -34,9 +83,7 @@ export default function TaskInterface({ task, onClose }) {
     <div className="task-interface-overlay">
       <div className="task-interface-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button onClick={onClose} className="btn-ghost" style={{ fontSize: 18 }}>
-            ←
-          </button>
+          <button onClick={onClose} className="btn-ghost" style={{ fontSize: 18 }}>←</button>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
               Task #{task.id}
@@ -46,16 +93,14 @@ export default function TaskInterface({ task, onClose }) {
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span className="task-genre-badge">
-            {genre} Mode
-          </span>
-          <button className="btn-primary">
-            Submit Work
-          </button>
-        </div>
+        <button 
+          className="btn-primary" 
+          onClick={handleSubmit}
+          disabled={!answer || submitting}
+        >
+          {submitting ? 'Submitting...' : 'Submit Work'}
+        </button>
       </div>
-
       <div className="task-interface-content">
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: 8, color: 'var(--tv-text)' }}>
@@ -64,81 +109,37 @@ export default function TaskInterface({ task, onClose }) {
           <p style={{ color: 'var(--tv-text-muted)', fontSize: 15, lineHeight: 1.7 }}>
             {task.desc}
           </p>
-          <div style={{ display: 'flex', gap: 16, marginTop: 16 }}>
-            <span className="task-pay" style={{ color: 'var(--tv-accent)', fontWeight: 800, fontFamily: 'var(--tv-font-mono)' }}>
-              {task.pay}
-            </span>
-            <span className={`task-difficulty ${task.difficulty.toLowerCase()}`}>
-              {task.difficulty}
-            </span>
-          </div>
         </div>
-
-        {renderTaskWorkspace()}
+        {renderWorkspace()}
       </div>
     </div>
   );
 }
 
-function WritingWorkspace({ task }) {
+function WritingWorkspace({ task, onAnswer, answer }) {
+  const [text, setText] = useState(answer?.text || '');
   return (
     <div className="writing-workspace">
-      <div style={{ marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid var(--tv-border)' }}>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
-          Prompt
-        </h3>
-        <p style={{ fontSize: 15, lineHeight: 1.7, color: 'var(--tv-text)' }}>
-          Write a detailed analysis of the following topic, focusing on clarity and depth. 
-          Target audience: technical readers. Word count: 500-800 words.
-        </p>
-      </div>
       <textarea 
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onAnswer({ type: 'writing', text: e.target.value, wordCount: e.target.value.split(/\s+/).filter(w => w).length });
+        }}
         placeholder="Start writing your response here..."
-        style={{ fontFamily: 'var(--tv-font)' }}
+        style={{ fontFamily: 'var(--tv-font)', minHeight: 300 }}
       />
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 12, color: 'var(--tv-text-muted)' }}>Auto-saved</span>
-        <button className="btn-primary">Save Draft</button>
+        <span style={{ fontSize: 12, color: 'var(--tv-text-muted)' }}>
+          {text.split(/\s+/).filter(w => w).length} words
+        </span>
       </div>
     </div>
   );
 }
 
-function RoboticsWorkspace({ task }) {
-  return (
-    <div>
-      <div className="robotics-viewer" style={{ marginBottom: 24 }}>
-        <div className="robotics-grid-overlay" />
-        <div style={{ textAlign: 'center', color: 'var(--tv-text-muted)' }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🦾</div>
-          <p>Robot teleoperation video would load here</p>
-          <p style={{ fontSize: 12, marginTop: 8, opacity: 0.6 }}>MP4 // 1920x1080 // 12.4MB</p>
-        </div>
-      </div>
-
-      <div style={{ background: 'var(--tv-bg-panel)', border: '1px solid var(--tv-border)', borderRadius: 'var(--tv-radius)', padding: 24 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 16 }}>
-          Phase Labels
-        </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {['Approach', 'Grasp', 'Lift', 'Transport', 'Place'].map((phase) => (
-            <div key={phase} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: 'var(--tv-bg)', borderRadius: 'var(--tv-radius)', border: '1px solid var(--tv-border)' }}>
-              <span style={{ fontFamily: 'var(--tv-font-mono)', fontSize: 12, color: 'var(--tv-accent)', minWidth: 60 }}>
-                00:00
-              </span>
-              <span style={{ fontWeight: 600, color: 'var(--tv-text)' }}>{phase}</span>
-              <button className="btn-ghost" style={{ marginLeft: 'auto', fontSize: 12 }}>
-                Mark Timestamp
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LLMWorkspace({ task }) {
+function LLMWorkspace({ task, onAnswer, answer }) {
+  const [choice, setChoice] = useState(answer?.choice || null);
   return (
     <div>
       <div style={{ background: 'var(--tv-bg-panel)', border: '1px solid var(--tv-border)', borderRadius: 'var(--tv-radius)', padding: 20, marginBottom: 24 }}>
@@ -149,51 +150,103 @@ function LLMWorkspace({ task }) {
           Explain the concept of gradient descent to a 10-year-old.
         </p>
       </div>
-
       <div className="llm-comparison">
-        <div className="llm-response">
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
-            Response A
+        {['A', 'B'].map((opt) => (
+          <div 
+            key={opt} 
+            className="llm-response" 
+            onClick={() => {
+              setChoice(opt);
+              onAnswer({ type: 'llm-rank', choice: opt });
+            }}
+            style={{ 
+              border: choice === opt ? '2px solid var(--tv-accent)' : '1px solid var(--tv-border)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
+              Response {opt}
+            </div>
+            <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--tv-text)' }}>
+              {opt === 'A' 
+                ? "Gradient descent is like walking down a hill with your eyes closed..." 
+                : "Imagine you're on a mountain and want to get to the lowest valley..."}
+            </p>
           </div>
-          <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--tv-text)' }}>
-            Gradient descent is like walking down a hill with your eyes closed. You feel the ground with your feet to find which way is downhill, then take a step that way. You keep doing this until you reach the bottom.
-          </p>
-          <button className="btn-secondary" style={{ marginTop: 16, width: '100%' }}>
-            Select A
-          </button>
-        </div>
-        <div className="llm-response">
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
-            Response B
-          </div>
-          <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--tv-text)' }}>
-            Imagine you're on a mountain and want to get to the lowest valley. Gradient descent is like checking which direction is steepest downhill, then taking a small step that way. You repeat until you can't go any lower.
-          </p>
-          <button className="btn-secondary" style={{ marginTop: 16, width: '100%' }}>
-            Select B
-          </button>
-        </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function VisionWorkspace({ task }) {
+function RoboticsWorkspace({ task, onAnswer, answer }) {
+  const [phases, setPhases] = useState(answer?.phases || []);
+  const addPhase = (name) => {
+    const updated = [...phases, { name, timestamp: Date.now() }];
+    setPhases(updated);
+    onAnswer({ type: 'robotics', phases: updated });
+  };
   return (
     <div>
-      <div className="vision-canvas" style={{ marginBottom: 24 }}>
-        <div style={{ aspectRatio: '16/9', background: 'var(--tv-bg-elevated)', display: 'grid', placeItems: 'center', color: 'var(--tv-text-muted)' }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 48, marginBottom: 12 }}>🔍</div>
-            <p>Industrial inspection image would load here</p>
-            <p style={{ fontSize: 12, marginTop: 8, opacity: 0.6 }}>PNG // 2048x1536 // 4.2MB</p>
-          </div>
+      <div className="robotics-viewer" style={{ marginBottom: 24, aspectRatio: '16/9', background: 'var(--tv-bg-elevated)', display: 'grid', placeItems: 'center' }}>
+        <div style={{ textAlign: 'center', color: 'var(--tv-text-muted)' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🦾</div>
+          <p>Robot teleoperation video would load here</p>
         </div>
       </div>
+      <div style={{ background: 'var(--tv-bg-panel)', border: '1px solid var(--tv-border)', borderRadius: 'var(--tv-radius)', padding: 24 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 16 }}>
+          Phase Labels
+        </h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {['Approach', 'Grasp', 'Lift', 'Transport', 'Place'].map((phase) => (
+            <div key={phase} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: 'var(--tv-bg)', borderRadius: 'var(--tv-radius)', border: '1px solid var(--tv-border)' }}>
+              <span style={{ fontWeight: 600, color: 'var(--tv-text)' }}>{phase}</span>
+              <button className="btn-ghost" style={{ marginLeft: 'auto', fontSize: 12 }} onClick={() => addPhase(phase)}>
+                Mark Timestamp
+              </button>
+            </div>
+          ))}
+        </div>
+        {phases.length > 0 && (
+          <div style={{ marginTop: 16, fontSize: 12, color: 'var(--tv-text-muted)' }}>
+            Marked: {phases.map(p => p.name).join(', ')}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
+function VisionWorkspace({ task, onAnswer, answer }) {
+  const [labels, setLabels] = useState(answer?.labels || []);
+  const toggle = (label) => {
+    const updated = labels.includes(label) 
+      ? labels.filter(l => l !== label) 
+      : [...labels, label];
+    setLabels(updated);
+    onAnswer({ type: 'vision', labels: updated });
+  };
+  return (
+    <div>
+      <div className="vision-canvas" style={{ marginBottom: 24, aspectRatio: '16/9', background: 'var(--tv-bg-elevated)', display: 'grid', placeItems: 'center', color: 'var(--tv-text-muted)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔍</div>
+          <p>Industrial inspection image would load here</p>
+        </div>
+      </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {['No Defect', 'Crack', 'Solder Bridge', 'Discoloration', 'Contamination'].map((label) => (
-          <button key={label} className="btn-secondary" style={{ fontSize: 13 }}>
+          <button 
+            key={label} 
+            className="btn-secondary" 
+            style={{ 
+              fontSize: 13,
+              background: labels.includes(label) ? 'var(--tv-accent)' : undefined,
+              color: labels.includes(label) ? '#fff' : undefined
+            }}
+            onClick={() => toggle(label)}
+          >
             {label}
           </button>
         ))}
@@ -202,30 +255,21 @@ function VisionWorkspace({ task }) {
   );
 }
 
-function AudioWorkspace({ task }) {
+function AudioWorkspace({ task, onAnswer, answer }) {
+  const [text, setText] = useState(answer?.text || '');
   return (
     <div>
       <div style={{ background: 'var(--tv-bg-panel)', border: '1px solid var(--tv-border)', borderRadius: 'var(--tv-radius)', padding: 32, marginBottom: 24, textAlign: 'center' }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🎧</div>
         <p style={{ color: 'var(--tv-text-muted)', marginBottom: 16 }}>Audio waveform visualization</p>
-        <div style={{ height: 60, background: 'var(--tv-bg)', borderRadius: 'var(--tv-radius)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '0 16px' }}>
-          {Array.from({ length: 40 }).map((_, i) => (
-            <div key={i} style={{ 
-              width: 3, 
-              height: `${Math.random() * 40 + 10}px`, 
-              background: 'var(--tv-accent)', 
-              borderRadius: 2,
-              opacity: 0.6 + Math.random() * 0.4
-            }} />
-          ))}
-        </div>
       </div>
-
       <div className="writing-workspace">
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
-          Transcription
-        </h3>
         <textarea 
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            onAnswer({ type: 'audio', text: e.target.value });
+          }}
           placeholder="Type what you hear..."
           style={{ fontFamily: 'var(--tv-font)', minHeight: 120 }}
         />
@@ -234,30 +278,30 @@ function AudioWorkspace({ task }) {
   );
 }
 
-function SafetyWorkspace({ task }) {
+function SafetyWorkspace({ task, onAnswer, answer }) {
+  const [level, setLevel] = useState(answer?.level || null);
   return (
     <div>
       <div className="safety-warning">
         <span style={{ fontSize: 20 }}>⚠️</span>
-        <span>This task involves identifying potentially harmful content. Proceed with professional discretion.</span>
+        <span>This task involves identifying potentially harmful content.</span>
       </div>
-
-      <div style={{ background: 'var(--tv-bg-panel)', border: '1px solid var(--tv-border)', borderRadius: 'var(--tv-radius)', padding: 24, marginBottom: 24 }}>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--tv-text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
-          Prompt to Evaluate
-        </h3>
-        <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--tv-text)', padding: 16, background: 'var(--tv-bg)', borderRadius: 'var(--tv-radius)' }}>
-          [Redacted prompt content would appear here for safety review]
-        </p>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-        {['Safe', 'Mild Risk', 'High Risk', 'Critical'].map((level) => (
-          <button key={level} className="btn-secondary" style={{ 
-            borderColor: level === 'Critical' ? 'var(--tv-danger)' : undefined,
-            color: level === 'Critical' ? 'var(--tv-danger)' : undefined
-          }}>
-            {level}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 24 }}>
+        {['Safe', 'Mild Risk', 'High Risk', 'Critical'].map((l) => (
+          <button 
+            key={l} 
+            className="btn-secondary" 
+            style={{ 
+              borderColor: l === level ? 'var(--tv-accent)' : undefined,
+              background: l === level ? 'var(--tv-accent)' : undefined,
+              color: l === level ? '#fff' : undefined
+            }}
+            onClick={() => {
+              setLevel(l);
+              onAnswer({ type: 'safety', level: l });
+            }}
+          >
+            {l}
           </button>
         ))}
       </div>
@@ -265,12 +309,19 @@ function SafetyWorkspace({ task }) {
   );
 }
 
-function GenericWorkspace({ task }) {
+function GenericWorkspace({ task, onAnswer, answer }) {
+  const [text, setText] = useState(answer?.text || '');
   return (
     <div className="writing-workspace">
-      <p style={{ color: 'var(--tv-text-muted)' }}>
-        Task workspace for {task.title}. This would be customized based on the specific task requirements.
-      </p>
+      <textarea 
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          onAnswer({ type: 'generic', text: e.target.value });
+        }}
+        placeholder="Enter your response..."
+        style={{ fontFamily: 'var(--tv-font)', minHeight: 200 }}
+      />
     </div>
   );
 }
