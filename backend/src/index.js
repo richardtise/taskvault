@@ -14,6 +14,7 @@ const taskRoutes = require('./routes/tasks');
 const userRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
 const DailyStats = require('./models/Analytics');
+const User = require('./models/User');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -58,14 +59,13 @@ app.use('/api/admin', adminRoutes);
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
+app.use('/api/appeals', appealRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {
   logger.error(`Unhandled error: ${err.message}`, { stack: err.stack });
   res.status(500).json({ error: 'Internal server error' });
 });
-
-app.use('/api/appeals', appealRoutes);
 
 // Database connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/taskvault')
@@ -98,7 +98,7 @@ cron.schedule('0 0 * * *', async () => {
 //Reputation cron
 cron.schedule ('0 2 * * *', async()=> {
   try{
-    const users = awaitUser.find({banned: false, tasksCompleted: { $gt: 0} });
+    const users = await User.find({banned: false, tasksCompleted: { $gt: 0} });
     logger.info('Recalculating reputation for ${users.length} users');
 
     for (const user of users) {
