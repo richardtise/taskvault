@@ -4,8 +4,6 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
-const appealRoutes = require('./routes/appeals');
-const verification = require('./services/verification');
 const cron = require('node-cron');
 require('dotenv').config();
 
@@ -13,8 +11,12 @@ const logger = require('./utils/logger');
 const taskRoutes = require('./routes/tasks');
 const userRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
+const appealRoutes = require('./routes/appeals');
+const verification = require('./services/verification');
 const DailyStats = require('./models/Analytics');
 const User = require('./models/User');
+const Task = require('./models/Task');
+const Submission = require('./models/Submission');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -50,16 +52,16 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API routes
+// API routes — MUST be before 404 handler
 app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/appeals', appealRoutes);
 
-// 404 handler
+// 404 handler — MUST be last
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
-app.use('/api/appeals', appealRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {
@@ -95,27 +97,28 @@ cron.schedule('0 0 * * *', async () => {
     logger.error(`Daily stats cron error: ${error.message}`);
   }
 });
-//Reputation cron
-cron.schedule ('0 2 * * *', async()=> {
-  try{
-    const users = await User.find({banned: false, tasksCompleted: { $gt: 0} });
-    logger.info('Recalculating reputation for ${users.length} users');
+
+// Reputation cron (runs at 2am)
+cron.schedule('0 2 * * *', async () => {
+  try {
+    const users = await User.find({ banned: false, tasksCompleted: { $gt: 0 } });
+    logger.info(`Recalculating reputation for ${users.length} users`);
 
     for (const user of users) {
       const rep = await verification.calculateReputation(user.walletAddress);
       await User.updateOne(
-        {walletAddress: user.walletAddress},
+        { walletAddress: user.walletAddress },
         {
           $set: {
             accuracy: rep.accuracy,
-            //tierIndex: rep.tier //uncomment when ready to auto-promote
+            // tierIndex: rep.tier // uncomment when ready to auto-promote
           }
         }
       );
     }
     logger.info('Reputation recalculation complete');
-  } catch (error){
-    logger.error ('Reputation cron error: ${error.message}');
+  } catch (error) {
+    logger.error(`Reputation cron error: ${error.message}`);
   }
 });
 

@@ -46,10 +46,17 @@ class VerifierBot {
         sub.reviewedAt = new Date();
 
         if (verdict.approved) {
-          const result = await blockchain.verifyTask(
-            sub.userAddress, sub.taskId, task.basePoints, true, task.modality
-          );
-          sub.txHash = result.txHash;
+          let txHash = null;
+          try {
+            const result = await blockchain.verifyTask(
+              sub.userAddress, sub.taskId, task.basePoints, true, task.modality
+            );
+            txHash = result.txHash;
+          } catch (chainErr) {
+            logger.error(`Chain mint failed for ${sub._id}: ${chainErr.message}`);
+          // Submission still approved, just no txHash yet. Retry later.
+          }
+          sub.txHash = txHash;
           sub.pointsAwarded = verdict.points;
         }
 
