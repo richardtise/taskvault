@@ -5,11 +5,24 @@ const logger = require('../utils/logger');
 const VAULT_ABI = [
   "function completeTask(address worker, bytes32 taskId, uint256 basePoints, bool correct) external",
   "function completeTaskWithModality(address worker, bytes32 taskId, uint256 basePoints, bool correct, bytes32 modality) external",
-  "function getUserInfo(address user) external view returns (bool exists, uint8 tierIndex, uint256 balance, uint256 lifetimeEarned, uint256 referralEarnings, uint256 referralCount, uint256 tasksCompleted, uint256 vaultBalance, uint256 vaultMultiplier, uint256 activeStreams)",
+  "function getUserInfo(address user) external view returns (bool exists, uint8 tierIndex, uint256 balance, uint256 lifetimeEarned, uint256 referralEarnings, uint256 referralCount, uint256 tasksCompleted, uint256 tasksCorrect, uint256 vaultBalance, uint256 vaultMultiplier, uint256 activeStreams)",
   "function getBadge(address user, bytes32 modality) external view returns (uint8 level, uint256 tasksCompleted, uint256 tasksCorrect, uint256 lastUpgraded)",
   "function canAccessTask(address user, uint8 requiredTier, bytes32 requiredModality, uint8 requiredBadge) external view returns (bool)",
   "event TaskCompleted(address indexed user, bytes32 indexed taskId, uint256 points, bool correct)",
 ];
+
+// Modality names registered in the contract constructor.
+// The contract stores keccak256(name); we must use ethers.id(name) — NOT encodeBytes32String.
+const MODALITY_NAMES = ['robotics', 'llm', 'vision', 'audio', 'writing', 'safety', 'medical'];
+
+const modalityHash = (name) => ethers.id(name); // keccak256(name)
+
+const toBytes32 = (value, fieldName) => {
+  if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error(`${fieldName} must be a 0x-prefixed 32-byte hex string`);
+  }
+  return value.toLowerCase();
+};
 
 class BlockchainService {
   constructor() {
@@ -29,7 +42,7 @@ class BlockchainService {
           ethers.id(taskId),
           ethers.parseUnits(basePoints.toString(), 18),
           correct,
-          ethers.encodeBytes32String(modality)
+          toBytes32(modality, 'task.modality')
         );
       } else {
         tx = await this.vault.completeTask(
@@ -75,6 +88,10 @@ class BlockchainService {
         referralEarnings: Number(ethers.formatUnits(info.referralEarnings, 18)),
         referralCount: Number(info.referralCount),
         tasksCompleted: Number(info.tasksCompleted),
+        tasksCorrect: Number(info.tasksCorrect),
+        accuracy: Number(info.tasksCompleted) > 0
+          ? (Number(info.tasksCorrect) / Number(info.tasksCompleted)) * 100
+          : 100,
         vaultBalance: Number(ethers.formatUnits(info.vaultBalance, 6)),
         vaultMultiplier: Number(info.vaultMultiplier) / 10000,
         activeStreams: Number(info.activeStreams),
@@ -90,10 +107,11 @@ class BlockchainService {
       return await this.vault.canAccessTask(
         address,
         requiredTier,
-        requiredModality ? ethers.encodeBytes32String(requiredModality) : ethers.ZeroHash,
+        requiredModality ? toBytes32(requiredModality, 'requiredModality') : ethers.ZeroHash,
         requiredBadge
       );
-    } catch {
+    } catch (error) {
+      logger.error(`canAccessTask failed: ${error.message}`);
       return false;
     }
   }
@@ -103,12 +121,11 @@ class BlockchainService {
     if (!info) return null;
 
     // Fetch all badges
-    const modalities = ['robotics', 'llm', 'vision', 'audio', 'writing', 'safety', 'medical'];
     const badges = [];
 
-    for (const mod of modalities) {
+    for (const mod of MODALITY_NAMES) {
       try {
-        const badge = await this.vault.getBadge(address, ethers.encodeBytes32String(mod));
+        const badge = await this.vault.getBadge(address, modalityHash(mod));
         if (badge.level > 0) {
           badges.push({
             modality: mod,

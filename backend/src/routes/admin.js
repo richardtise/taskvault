@@ -35,12 +35,21 @@ router.get('/submissions/pending', authMiddleware, adminMiddleware, async (req, 
     const submissions = await Submission.find({ status: 'pending' })
       .sort({ createdAt: 1 })
       .skip((page - 1) * limit)
-      .limit(Number(limit))
-      .populate('taskId');
+      .limit(Number(limit));
 
-    const total = await Submission.countDocuments({ status: 'pending' });
+    // taskId is a string, not an ObjectId — fetch tasks manually
+    const taskIds = [...new Set(submissions.map(s => s.taskId))];
+    const tasks = await Task.find({ taskId: { $in: taskIds } });
+    const taskById = new Map(tasks.map(t => [t.taskId, t]));
 
-    res.json({ submissions, total, page: Number(page) });
+    res.json({
+      submissions: submissions.map(s => ({
+        ...s.toObject(),
+        task: taskById.get(s.taskId) || null,
+      })),
+      total: await Submission.countDocuments({ status: 'pending' }),
+      page: Number(page)
+    });
   } catch (error) {
     logger.error(`List pending error: ${error.message}`);
     res.status(500).json({ error: 'Failed to fetch submissions' });
@@ -67,14 +76,33 @@ router.post('/submissions/:id/review', authMiddleware, adminMiddleware, async (r
       return res.status(404).json({ error: 'Task not found' });
     }
 
-    // Call blockchain to verify and mint points
-    const result = await blockchain.verifyTask(
-      submission.userAddress,
-      submission.taskId,
-      task.basePoints,
-      correct,
-      task.modality
+    // Mark as under review first to prevent double-review races
+    const claimed = await Submission.updateOne(
+      { _id: submission._id, status: 'pending' },
+      { $set: { status: 'under_review', verifierAddress: req.user.walletAddress } }
     );
+    if (claimed.modifiedCount === 0) {
+      return res.status(409).json({ error: 'Submission is being reviewed by someone else' });
+    }
+
+    // Call blockchain to verify and mint points
+    let result;
+    try {
+      result = await blockchain.verifyTask(
+        submission.userAddress,
+        submission.taskId,
+        task.basePoints,
+        correct,
+        task.modality
+      );
+    } catch (chainError) {
+      // Roll back the claim so the submission can be reviewed again
+      await Submission.updateOne(
+        { _id: submission._id },
+        { $set: { status: 'pending' }, $unset: { verifierAddress: 1 } }
+      );
+      throw chainError;
+    }
 
     // Update submission
     submission.status = correct ? 'approved' : 'rejected';
@@ -86,15 +114,31 @@ router.post('/submissions/:id/review', authMiddleware, adminMiddleware, async (r
     submission.pointsAwarded = result.pointsAwarded;
     submission.reviewedAt = new Date();
 
-    await submission.save();
+    try {
+      await submission.save();
+    } catch (dbError) {
+      // Chain succeeded but DB failed — flag for manual reconciliation
+      logger.error(`CRITICAL: chain tx ${result.txHash} succeeded but DB update failed: ${dbError.message}`);
+      return res.status(500).json({
+        error: 'Points issued on-chain but failed to save review. Reconcile manually.',
+        txHash: result.txHash,
+        pointsAwarded: result.pointsAwarded,
+      });
+    }
 
-    // Update user stats
+    // Update user stats. NOTE: tasksCompleted/tasksCorrect/totalPoints are
+    // authoritative on-chain; these DB counters are for fast queries only and
+    // are overwritten on chain sync. weeklyPoints/monthlyPoints are DB-only
+    // (used for the period leaderboard).
     await User.updateOne(
       { walletAddress: submission.userAddress },
-      { 
-        $inc: { 
+      {
+        $inc: {
           tasksCompleted: 1,
-          totalPoints: result.pointsAwarded 
+          tasksCorrect: correct ? 1 : 0,
+          totalPoints: result.pointsAwarded,
+          weeklyPoints: correct ? result.pointsAwarded : 0,
+          monthlyPoints: correct ? result.pointsAwarded : 0,
         },
         lastActive: new Date()
       }
@@ -148,32 +192,39 @@ router.get('/analytics', authMiddleware, adminMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch analytics' });
   }
 });
+
 // POST /api/admin/appeals/:submissionId/resolve
 router.post('/appeals/:submissionId/resolve', authMiddleware, adminMiddleware, async (req, res) => {
-  const { resolution, overrideStatus } = req.body; // 'upheld' or 'overturned'
-  const submission = await Submission.findById(req.params.submissionId);
-  
-  if (!submission || !submission.disputed) {
-    return res.status(404).json({ error: 'No active appeal found' });
-  }
+  try {
+    const { resolution, overrideStatus } = req.body; // 'upheld' or 'overturned'
+    const submission = await Submission.findById(req.params.submissionId);
 
-  submission.disputeResolution = resolution;
-  if (overrideStatus) {
-    submission.status = overrideStatus;
-    if (overrideStatus === 'approved') {
-      // await blockchain.verifyTask(submission.userAddress, submission.taskId, ...);
+    if (!submission || !submission.disputed) {
+      return res.status(404).json({ error: 'No active appeal found' });
     }
-  }
-  await submission.save();
 
-  if (resolution === 'overturned') {
-    await User.updateOne(
-      { walletAddress: submission.userAddress },
-      { $inc: { strikes: -1 } }
-    );
-  }
+    submission.disputeResolution = resolution;
+    if (overrideStatus) {
+      submission.status = overrideStatus;
+      if (overrideStatus === 'approved') {
+        // TODO: re-issue points on-chain if the original review was rejected.
+        // await blockchain.verifyTask(submission.userAddress, submission.taskId, ...);
+      }
+    }
+    await submission.save();
 
-  res.json({ success: true, message: `Appeal ${resolution}` });
+    if (resolution === 'overturned') {
+      await User.updateOne(
+        { walletAddress: submission.userAddress },
+        { $inc: { strikes: -1 } }
+      );
+    }
+
+    res.json({ success: true, message: `Appeal ${resolution}` });
+  } catch (error) {
+    logger.error(`Resolve appeal error: ${error.message}`);
+    res.status(500).json({ error: 'Failed to resolve appeal' });
+  }
 });
 
 // POST /api/admin/sync-user — Force sync user from chain
@@ -193,6 +244,8 @@ router.post('/sync-user', authMiddleware, adminMiddleware, async (req, res) => {
         totalPoints: chainData.balance,
         lifetimeEarned: chainData.lifetimeEarned,
         tasksCompleted: chainData.tasksCompleted,
+        tasksCorrect: chainData.tasksCorrect,
+        accuracy: chainData.accuracy,
         badges: chainData.badges,
         lastSynced: new Date()
       },

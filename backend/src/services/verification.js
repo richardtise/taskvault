@@ -1,18 +1,18 @@
 const Submission = require('../models/Submission');
 const Task = require('../models/Task');
 const User = require('../models/User');
-const blockchain = require('./blockchain');
 const logger = require('../utils/logger');
+const { CATEGORIES, NO_PASTE_CATEGORIES, TEXT_ANALYSIS_CATEGORIES } = require('../constants/taskCategories');
 
 const TIME_LIMITS = {
-  'llm-rank': { min: 8000, max: 300000 },
-  'robot-phase': { min: 45000, max: 600000 },
-  'grasp-annotate': { min: 15000, max: 300000 },
-  'safety-redteam': { min: 30000, max: 600000 },
-  'human-demo': { min: 120000, max: 900000 },
-  'vision-label': { min: 10000, max: 300000 },
-  'writing-eval': { min: 20000, max: 600000 },
-  'audio-transcribe': { min: 30000, max: 600000 },
+  [CATEGORIES.LLM_RANK]: { min: 8000, max: 300000 },
+  [CATEGORIES.ROBOT_PHASE]: { min: 45000, max: 600000 },
+  [CATEGORIES.GRASP_ANNOTATE]: { min: 15000, max: 300000 },
+  [CATEGORIES.SAFETY_REDTEAM]: { min: 30000, max: 600000 },
+  [CATEGORIES.HUMAN_DEMO]: { min: 120000, max: 900000 },
+  [CATEGORIES.VISION_LABEL]: { min: 10000, max: 300000 },
+  [CATEGORIES.WRITING_EVAL]: { min: 20000, max: 600000 },
+  [CATEGORIES.AUDIO_TRANSCRIBE]: { min: 30000, max: 600000 },
 };
 
 class VerificationService {
@@ -32,9 +32,9 @@ class VerificationService {
       }
     }
 
-    // 2. TIME ON TASK
+    // 2. TIME ON TASK (look up by the task's actual category)
     const m = submission.metrics || {};
-    const limits = TIME_LIMITS[task.category] || TIME_LIMITS[submission.taskId.split('-')[0]];
+    const limits = TIME_LIMITS[task.category];
     if (limits && m.timeSpentMs) {
       if (m.timeSpentMs < limits.min) {
         flags.push('TOO_FAST');
@@ -47,7 +47,7 @@ class VerificationService {
     }
 
     // 3. BEHAVIORAL BIOMETRICS
-    if (m.pasteEvents > 0 && ['writing', 'safety', 'audio'].includes(task.category)) {
+    if (m.pasteEvents > 0 && NO_PASTE_CATEGORIES.includes(task.category)) {
       flags.push('PASTE_DETECTED');
       confidence *= 0.3;
     }
@@ -65,7 +65,7 @@ class VerificationService {
     }
 
     // 4. TEXT FINGERPRINTING
-    if (['writing', 'safety', 'audio'].includes(task.category)) {
+    if (TEXT_ANALYSIS_CATEGORIES.includes(task.category)) {
       const text = JSON.stringify(submission.answer);
       const textScore = this.analyzeText(text);
       if (textScore.aiProbability > 0.85) {
@@ -173,7 +173,7 @@ class VerificationService {
     .limit(200)
     .lean();
 
-    if (history.length === 0) return { score: 0, tier: 0 };
+    if (history.length === 0) return { score: 0, tier: 0, accuracy: 0 };
 
     let weightedAccuracy = 0;
     let accuracyValues = [];

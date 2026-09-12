@@ -36,6 +36,14 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Stricter limiter for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { error: 'Too many auth attempts, please try again later.' }
+});
+app.use('/api/users/auth', authLimiter);
+
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -95,6 +103,32 @@ cron.schedule('0 0 * * *', async () => {
     logger.info('Daily stats computed and saved');
   } catch (error) {
     logger.error(`Daily stats cron error: ${error.message}`);
+  }
+});
+
+// Reset weekly/monthly leaderboard counters (runs at 00:30)
+cron.schedule('30 0 * * *', async () => {
+  try {
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // Monday
+    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const weekRes = await User.updateMany(
+      { lastWeeklyReset: { $lt: startOfWeek } },
+      { $set: { weeklyPoints: 0, lastWeeklyReset: now } }
+    );
+    const monthRes = await User.updateMany(
+      { lastMonthlyReset: { $lt: startOfMonth } },
+      { $set: { monthlyPoints: 0, lastMonthlyReset: now } }
+    );
+
+    if (weekRes.modifiedCount > 0 || monthRes.modifiedCount > 0) {
+      logger.info(`Leaderboard counters reset: ${weekRes.modifiedCount} weekly, ${monthRes.modifiedCount} monthly`);
+    }
+  } catch (error) {
+    logger.error(`Leaderboard reset cron error: ${error.message}`);
   }
 });
 

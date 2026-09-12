@@ -54,7 +54,7 @@ contract TaskVaultTest is Test {
         vm.prank(user);
         vault.register(address(0));
 
-        (bool exists,,,,,,,,,) = vault.getUserInfo(user);
+        (bool exists,,,,,,,,,,) = vault.getUserInfo(user);
         assertTrue(exists);
     }
 
@@ -65,7 +65,7 @@ contract TaskVaultTest is Test {
         vm.prank(user);
         vault.register(referrer);
 
-        (,,,,, uint256 refCount,,,,) = vault.getUserInfo(referrer);
+        (,,,,, uint256 refCount,,,,,) = vault.getUserInfo(referrer);
         assertEq(refCount, 1);
     }
 
@@ -82,9 +82,23 @@ contract TaskVaultTest is Test {
         vm.prank(verifier);
         vault.completeTask(user, keccak256("task1"), 100e18, true);
 
-        (,, uint256 balance,,,, uint256 tasks,,,) = vault.getUserInfo(user);
+        (,, uint256 balance,,,, uint256 tasks,,,,) = vault.getUserInfo(user);
         assertEq(tasks, 1);
         assertGt(balance, 0);
+    }
+
+    function test_CannotCompleteSameTaskTwice() public {
+        vm.prank(user);
+        vault.register(address(0));
+
+        bytes32 taskId = keccak256("task-replay");
+
+        vm.prank(verifier);
+        vault.completeTask(user, taskId, 100e18, true);
+
+        vm.prank(verifier);
+        vm.expectRevert("Task already completed");
+        vault.completeTask(user, taskId, 100e18, true);
     }
 
     function test_CompleteTaskWithModality() public {
@@ -97,6 +111,23 @@ contract TaskVaultTest is Test {
         TaskVault.Badge memory badge = vault.getBadge(user, ROBOTICS);
         assertEq(uint256(badge.level), 0); // Not enough tasks for Bronze yet
         assertEq(badge.tasksCompleted, 1);
+        assertEq(badge.tasksCorrect, 1);
+    }
+
+    function test_BadgeCountsIncorrectAttempts() public {
+        vm.prank(user);
+        vault.register(address(0));
+
+        // 1 wrong + 1 correct: tasksCompleted=2, tasksCorrect=1 → accuracy 50%
+        vm.prank(verifier);
+        vault.completeTaskWithModality(user, keccak256("w1"), 10e18, false, ROBOTICS);
+
+        vm.prank(verifier);
+        vault.completeTaskWithModality(user, keccak256("c1"), 10e18, true, ROBOTICS);
+
+        TaskVault.Badge memory badge = vault.getBadge(user, ROBOTICS);
+        assertEq(badge.tasksCompleted, 2);
+        assertEq(badge.tasksCorrect, 1);
     }
 
     function test_BadgeUpgradeToBronze() public {
@@ -112,6 +143,7 @@ contract TaskVaultTest is Test {
         TaskVault.Badge memory badge = vault.getBadge(user, ROBOTICS);
         assertEq(uint256(badge.level), 1); // Bronze
         assertEq(badge.tasksCompleted, 20);
+        assertEq(badge.tasksCorrect, 20);
     }
 
     function test_BadgeUpgradeToSilver() public {
@@ -140,7 +172,6 @@ contract TaskVaultTest is Test {
         (bytes32[] memory modalities, TaskVault.Badge[] memory badges) = vault.getAllBadges(user);
         assertGt(modalities.length, 0);
 
-        // Find robotics badge
         bool found = false;
         for (uint i = 0; i < modalities.length; i++) {
             if (modalities[i] == ROBOTICS) {
@@ -155,15 +186,12 @@ contract TaskVaultTest is Test {
         vm.prank(user);
         vault.register(address(0));
 
-        // User is Scout (tier 0), no badge
         bool canAccess = vault.canAccessTask(user, 0, ROBOTICS, 0);
         assertTrue(canAccess);
 
-        // Requires Bronze in Robotics
         canAccess = vault.canAccessTask(user, 0, ROBOTICS, 1);
         assertFalse(canAccess);
 
-        // Earn Bronze
         for (uint i = 0; i < 20; i++) {
             vm.prank(verifier);
             vault.completeTaskWithModality(user, keccak256(abi.encode(i)), 10e18, true, ROBOTICS);
@@ -180,7 +208,7 @@ contract TaskVaultTest is Test {
         vm.prank(user);
         vault.depositToVault(500e6);
 
-        (,,,,,,, uint256 vBal, uint256 vMult,) = vault.getUserInfo(user);
+        (,,,,,,, uint256 vBal, uint256 vMult,,) = vault.getUserInfo(user);
         assertEq(vBal, 500e6);
         assertEq(vMult, 5000); // +0.5x
     }
@@ -195,7 +223,7 @@ contract TaskVaultTest is Test {
         vm.prank(user);
         vault.withdrawFromVault(200e6);
 
-        (,,,,,,, uint256 vBal,,) = vault.getUserInfo(user);
+        (,,,,,,, uint256 vBal,,,) = vault.getUserInfo(user);
         assertEq(vBal, 300e6);
     }
 
@@ -243,7 +271,7 @@ contract TaskVaultTest is Test {
             vault.completeTask(user, keccak256(abi.encode(i)), 10e18, true);
         }
 
-        (, uint8 tier,,,,,,,,) = vault.getUserInfo(user);
+        (, uint8 tier,,,,,,,,,) = vault.getUserInfo(user);
         assertEq(tier, 1); // Operator
     }
 
@@ -256,13 +284,13 @@ contract TaskVaultTest is Test {
             vault.completeTask(user, keccak256(abi.encode(i)), 10e18, true);
         }
 
-        (, uint8 tier,,,,,,,,) = vault.getUserInfo(user);
+        (, uint8 tier,,,,,,,,,) = vault.getUserInfo(user);
         assertEq(tier, 3); // Expert
 
         vm.prank(admin);
         vault.inviteArchitect(user);
 
-        (, uint8 newTier,,,,,,,,) = vault.getUserInfo(user);
+        (, uint8 newTier,,,,,,,,,) = vault.getUserInfo(user);
         assertEq(newTier, 4); // Architect
     }
 
@@ -275,7 +303,7 @@ contract TaskVaultTest is Test {
             vault.completeTask(user, keccak256(abi.encode(i)), 100e18, true);
         }
 
-        (,, uint256 balance,,,,,,,) = vault.getUserInfo(user);
+        (,, uint256 balance,,,,,,,,) = vault.getUserInfo(user);
         assertLe(balance, 500e18);
     }
 
@@ -289,20 +317,21 @@ contract TaskVaultTest is Test {
         vm.prank(verifier);
         vault.completeTask(user, keccak256("task1"), 100e18, true);
 
-        (,,,, uint256 refEarnings,,,,,) = vault.getUserInfo(referrer);
+        (,,,, uint256 refEarnings,,,,,,) = vault.getUserInfo(referrer);
         assertGt(refEarnings, 0);
     }
 
     function test_GetRegisteredModalities() public {
         bytes32[] memory mods = vault.getRegisteredModalities();
-        assertGe(mods.length, 6); // At least the 6 default modalities
+        assertGe(mods.length, 6);
     }
 
     function test_RegisterNewModality() public {
-        bytes32 newMod = keccak256("game-ai");
+        string memory name = "game-ai";
+        bytes32 newMod = keccak256(bytes(name));
 
         vm.prank(admin);
-        vault.registerModality(newMod, "Game AI");
+        vault.registerModality(newMod, name);
 
         bytes32[] memory mods = vault.getRegisteredModalities();
         bool found = false;
@@ -310,5 +339,42 @@ contract TaskVaultTest is Test {
             if (mods[i] == newMod) found = true;
         }
         assertTrue(found);
+    }
+
+    function test_RegisterModalityRejectsBadHash() public {
+        vm.prank(admin);
+        vm.expectRevert("Hash must equal keccak256(name)");
+        vault.registerModality(bytes32(uint256(12345)), "game-ai");
+    }
+
+    function test_GetUserInfoTracksCorrectTasks() public {
+        vm.prank(user);
+        vault.register(address(0));
+
+        vm.prank(verifier);
+        vault.completeTask(user, keccak256("t1"), 10e18, true);
+        vm.prank(verifier);
+        vault.completeTask(user, keccak256("t2"), 10e18, false);
+
+        (,,,,,, uint256 tasks, uint256 correctTasks,,,) = vault.getUserInfo(user);
+        assertEq(tasks, 2);
+        assertEq(correctTasks, 1);
+    }
+
+    function test_Leaderboard() public {
+        vm.prank(user);
+        vault.register(address(0));
+        vm.prank(referrer);
+        vault.register(address(0));
+
+        vm.prank(verifier);
+        vault.completeTask(user, keccak256("t1"), 100e18, true);
+
+        (address[] memory addrs, uint256[] memory scores) = vault.getLeaderboard(10);
+        assertEq(addrs.length, 2);
+
+        // user earned more than referrer (who earned nothing)
+        assertEq(addrs[0], user);
+        assertGt(scores[0], scores[1]);
     }
 }

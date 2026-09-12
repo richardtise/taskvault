@@ -4,8 +4,8 @@ const Task = require('../models/Task');
 const Submission = require('../models/Submission');
 const User = require('../models/User');
 const blockchain = require('../services/blockchain');
-const ipfs = require('../services/ipfs');
 const { authMiddleware } = require('../middleware/auth');
+const { NO_PASTE_CATEGORIES } = require('../constants/taskCategories');
 const logger = require('../utils/logger');
 
 // GET /api/tasks — List available tasks
@@ -127,7 +127,7 @@ router.post('/:taskId/submit', authMiddleware, async (req, res) => {
       if (metrics.timeSpentMs < minTime) {
         return res.status(400).json({ error: 'Submission too fast. Please take your time.' });
       }
-      if (metrics.pasteEvents > 0 && ['writing-eval', 'safety-redteam', 'audio-transcribe'].includes(task.category)) {
+      if (metrics.pasteEvents > 0 && NO_PASTE_CATEGORIES.includes(task.category)) {
         return res.status(400).json({ error: 'Paste detected. Type your own response.' });
       }
     }

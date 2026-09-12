@@ -2,6 +2,12 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 
+const getAdminWallets = () =>
+  (process.env.ADMIN_WALLETS || process.env.ADMIN_WALLET || '')
+    .split(',')
+    .map(w => w.trim().toLowerCase())
+    .filter(Boolean);
+
 const authMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
@@ -16,6 +22,10 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ error: 'User not found' });
     }
 
+    if (user.banned) {
+      return res.status(403).json({ error: 'Account banned' });
+    }
+
     req.user = user;
     next();
   } catch (error) {
@@ -25,10 +35,15 @@ const authMiddleware = async (req, res, next) => {
 };
 
 const adminMiddleware = async (req, res, next) => {
-  if (req.user.walletAddress.toLowerCase() !== process.env.ADMIN_WALLET.toLowerCase()) {
+  const admins = getAdminWallets();
+  if (admins.length === 0) {
+    logger.error('ADMIN_WALLET(S) not configured');
+    return res.status(500).json({ error: 'Server misconfigured' });
+  }
+  if (!admins.includes(req.user.walletAddress.toLowerCase())) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
 };
 
-module.exports = { authMiddleware, adminMiddleware };
+module.exports = { authMiddleware, adminMiddleware, getAdminWallets };

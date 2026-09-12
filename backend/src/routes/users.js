@@ -1,48 +1,99 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { ethers } = require('ethers');
 const User = require('../models/User');
 const Submission = require('../models/Submission');
 const blockchain = require('../services/blockchain');
 const { authMiddleware } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
-// POST /api/users/auth — Authenticate with wallet signature
+const buildLoginMessage = (walletAddress, nonce) =>
+  `TaskVault Login\nWallet: ${walletAddress.toLowerCase()}\nNonce: ${nonce}\nIssued At: ${new Date().toISOString()}`;
+
+// POST /api/users/auth/nonce — get a nonce to sign (SIWE-style)
+router.post('/auth/nonce', async (req, res) => {
+  try {
+    const { walletAddress } = req.body;
+    if (!walletAddress || !ethers.isAddress(walletAddress)) {
+      return res.status(400).json({ error: 'Valid walletAddress required' });
+    }
+
+    const address = walletAddress.toLowerCase();
+    const nonce = crypto.randomBytes(16).toString('hex');
+
+    await User.updateOne(
+      { walletAddress: address },
+      { $set: { authNonce: nonce }, $setOnInsert: { walletAddress: address } },
+      { upsert: true }
+    );
+
+    res.json({
+      nonce,
+      message: buildLoginMessage(address, nonce),
+    });
+  } catch (error) {
+    logger.error(`Nonce error: ${error.message}`);
+    res.status(500).json({ error: 'Failed to issue nonce' });
+  }
+});
+
+// POST /api/users/auth — Authenticate with a verified wallet signature
 router.post('/auth', async (req, res) => {
   try {
     const { walletAddress, signature, message } = req.body;
 
-    // Verify signature (simplified — in production use ethers.verifyMessage)
-    // For now, we trust the frontend to handle wallet auth via RainbowKit
-    // Backend just creates/returns user
-
-    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
-
-    if (!user) {
-      user = new User({ walletAddress: walletAddress.toLowerCase() });
-      await user.save();
-      logger.info(`New user registered: ${walletAddress}`);
+    if (!walletAddress || !signature || !message) {
+      return res.status(400).json({ error: 'walletAddress, signature and message are required' });
+    }
+    if (!ethers.isAddress(walletAddress)) {
+      return res.status(400).json({ error: 'Invalid walletAddress' });
     }
 
+    const address = walletAddress.toLowerCase();
+
+    // Recover signer from the signed message
+    let recovered;
+    try {
+      recovered = ethers.verifyMessage(message, signature).toLowerCase();
+    } catch {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    if (recovered !== address) {
+      return res.status(401).json({ error: 'Signature does not match walletAddress' });
+    }
+
+    // The signed message must contain the user's current server nonce (replay protection)
+    const user = await User.findOne({ walletAddress: address });
+    if (!user || !user.authNonce || !message.includes(user.authNonce)) {
+      return res.status(401).json({ error: 'Stale or missing nonce. Request a new one via /auth/nonce.' });
+    }
+
+    // Rotate nonce so the same signature can never be replayed
+    user.authNonce = crypto.randomBytes(16).toString('hex');
+
     // Sync with chain
-    const chainData = await blockchain.syncUserFromChain(walletAddress);
+    const chainData = await blockchain.syncUserFromChain(address);
     if (chainData) {
       user.tierIndex = chainData.tierIndex;
       user.totalPoints = chainData.balance;
       user.lifetimeEarned = chainData.lifetimeEarned;
       user.tasksCompleted = chainData.tasksCompleted;
-      user.accuracy = chainData.tasksCompleted > 0 
-        ? (chainData.tasksCompleted / chainData.tasksCompleted) * 100 
-        : 100;
+      user.tasksCorrect = chainData.tasksCorrect;
+      user.accuracy = chainData.accuracy;
       user.badges = chainData.badges;
       user.lastSynced = new Date();
-      await user.save();
     }
+
+    user.lastActive = new Date();
+    await user.save();
 
     const token = jwt.sign(
       { walletAddress: user.walletAddress },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
 
     res.json({ token, user });
@@ -62,12 +113,13 @@ router.get('/me', authMiddleware, async (req, res) => {
       req.user.totalPoints = chainData.balance;
       req.user.lifetimeEarned = chainData.lifetimeEarned;
       req.user.tasksCompleted = chainData.tasksCompleted;
+      req.user.tasksCorrect = chainData.tasksCorrect;
+      req.user.accuracy = chainData.accuracy;
       req.user.badges = chainData.badges;
       req.user.lastSynced = new Date();
       await req.user.save();
     }
 
-    // Get recent submissions
     const recentSubmissions = await Submission.find({
       userAddress: req.user.walletAddress
     })
@@ -98,7 +150,7 @@ router.get('/leaderboard', async (req, res) => {
       .sort({ [sortField]: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
-      .select('walletAddress username tierIndex totalPoints lifetimeEarned tasksCompleted badges');
+      .select('walletAddress username tierIndex totalPoints lifetimeEarned weeklyPoints monthlyPoints tasksCompleted badges');
 
     const total = await User.countDocuments();
 

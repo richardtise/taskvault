@@ -69,7 +69,14 @@ contract TaskVault is AccessControl, ReentrancyGuard {
     mapping(address => Stream[]) public userStreams;
     mapping(address => bool) public isArchitect; // invite-only tier 5
 
+    // Anti-replay: a given worker can only complete a given taskId once
+    mapping(address => mapping(bytes32 => bool)) public completedTasks;
+
+    // Leaderboard: every registered user, scored by lifetimeEarned
+    address[] public registeredUsers;
+
     // Horizontal badge system: user -> modalityHash -> badge
+    // NOTE: modalityHash MUST be keccak256(modalityName), e.g. keccak256("robotics")
     mapping(address => mapping(bytes32 => Badge)) public userBadges;
     bytes32[] public registeredModalities;
     mapping(bytes32 => bool) public isModalityRegistered;
@@ -136,7 +143,8 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         tiers.push(Tier("Expert", 500, 9500, 40000));   // 4.0x
         tiers.push(Tier("Architect", type(uint256).max, 9800, 60000)); // 6.0x, invite-only
 
-        // Register default modalities
+        // Register default modalities (keccak256 of the modality name —
+        // the backend MUST use the same convention: ethers.id(name))
         _registerModality(keccak256("robotics"), "Robotics");
         _registerModality(keccak256("llm"), "LLM Evaluation");
         _registerModality(keccak256("vision"), "Computer Vision");
@@ -156,7 +164,9 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         }
     }
 
+    /// @notice Register a modality. `_modalityHash` must equal keccak256(name).
     function registerModality(bytes32 modalityHash, string memory name) external onlyRole(ADMIN_ROLE) {
+        require(modalityHash == keccak256(bytes(name)), "Hash must equal keccak256(name)");
         _registerModality(modalityHash, name);
     }
 
@@ -175,6 +185,8 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         user.tierIndex = 0;
         user.lastWeeklyReset = block.timestamp;
 
+        registeredUsers.push(msg.sender);
+
         if (referrer != address(0) && users[referrer].exists && users[referrer].referralCount < MAX_REFERRALS) {
             user.referrer = referrer;
             users[referrer].referralCount++;
@@ -191,6 +203,7 @@ contract TaskVault is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Complete a task with modality tracking for badges.
+    /// @param modality keccak256(modalityName), must be registered.
     function completeTaskWithModality(
         address worker, 
         bytes32 taskId, 
@@ -210,14 +223,17 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         bytes32 modality
     ) internal {
         require(users[worker].exists, "Worker not registered");
+        require(!completedTasks[worker][taskId], "Task already completed");
+        completedTasks[worker][taskId] = true;
 
         User storage user = users[worker];
         user.tasksCompleted++;
         if (correct) user.tasksCorrect++;
 
-        // Update modality badge if specified
-        if (modality != bytes32(0) && correct) {
-            _updateBadge(worker, modality);
+        // Update modality badge stats for EVERY attempt (correct or not),
+        // so accuracy reflects real reliability.
+        if (modality != bytes32(0)) {
+            _updateBadge(worker, modality, correct);
         }
 
         // Check weekly cap
@@ -261,10 +277,10 @@ contract TaskVault is AccessControl, ReentrancyGuard {
 
     // --- Badge System ---
 
-    function _updateBadge(address user, bytes32 modality) internal {
+    function _updateBadge(address user, bytes32 modality, bool correct) internal {
         Badge storage badge = userBadges[user][modality];
         badge.tasksCompleted++;
-        badge.tasksCorrect++;
+        if (correct) badge.tasksCorrect++;
 
         // Check for badge upgrade
         BadgeLevel currentLevel = badge.level;
@@ -490,6 +506,7 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         uint256 referralEarnings,
         uint256 referralCount,
         uint256 tasksCompleted,
+        uint256 tasksCorrect,
         uint256 vaultBalance,
         uint256 vaultMultiplier,
         uint256 activeStreams
@@ -503,6 +520,7 @@ contract TaskVault is AccessControl, ReentrancyGuard {
             u.referralEarnings,
             u.referralCount,
             u.tasksCompleted,
+            u.tasksCorrect,
             u.vaultBalance,
             u.vaultMultiplier,
             u.activeStreams
@@ -513,9 +531,34 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         return tiers.length;
     }
 
+    /// @notice Returns the top `count` registered users by lifetimeEarned.
+    /// @dev O(n) view — fine for moderate user counts; for large N use an off-chain indexer.
     function getLeaderboard(uint256 count) external view returns (address[] memory, uint256[] memory) {
-        address[] memory addrs = new address[](count);
-        uint256[] memory scores = new uint256[](count);
+        uint256 n = registeredUsers.length;
+        uint256 m = count < n ? count : n;
+
+        address[] memory addrs = new address[](m);
+        uint256[] memory scores = new uint256[](m);
+
+        // Working copies for selection sort
+        address[] memory tmpA = new address[](n);
+        uint256[] memory tmpS = new uint256[](n);
+        for (uint i = 0; i < n; i++) {
+            tmpA[i] = registeredUsers[i];
+            tmpS[i] = users[registeredUsers[i]].lifetimeEarned;
+        }
+
+        for (uint i = 0; i < m; i++) {
+            uint256 best = i;
+            for (uint j = i + 1; j < n; j++) {
+                if (tmpS[j] > tmpS[best]) best = j;
+            }
+            addrs[i] = tmpA[best];
+            scores[i] = tmpS[best];
+            tmpA[best] = tmpA[i];
+            tmpS[best] = tmpS[i];
+        }
+
         return (addrs, scores);
     }
 
