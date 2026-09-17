@@ -71,20 +71,20 @@ export default function Landing() {
         </div>
         <div className="landing-stats">
           <div>
-            <strong>6</strong>
-            <span>Task Categories</span>
-          </div>
-          <div>
-            <strong>0</strong>
-            <span>Points Issued</span>
-          </div>
-          <div>
-            <strong>0</strong>
-            <span>Contributors</span>
-          </div>
-          <div>
             <strong>5</strong>
             <span>Tier Levels</span>
+          </div>
+          <div>
+            <strong>Free</strong>
+            <span>To Register</span>
+          </div>
+          <div>
+            <strong>0</strong>
+            <span>Deposits Required</span>
+          </div>
+          <div>
+            <strong>On-chain</strong>
+            <span>Reputation</span>
           </div>
         </div>
       </section>

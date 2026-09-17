@@ -2,9 +2,18 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Install production dependencies only (--omit=dev; --only=production is
+# deprecated in npm 7+).
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 COPY src ./src
 
+# The verifier writes to /app/logs too; keep it writable for the non-root user.
+RUN mkdir -p logs && chown -R node:node /app
+
+USER node
+
+# No HTTP endpoint, so there is no HTTP HEALTHCHECK. Compose tracks this
+# service through its restart policy and container state.
 CMD ["node", "src/scripts/verifierBot.js"]

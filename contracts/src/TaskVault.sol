@@ -2,13 +2,15 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./TaskVaultPoints.sol";
 
 /// @title TaskVault
 /// @notice Main contract for TaskVault — free registration, task completion, tiers, badges, referrals, vault, and streaming.
 contract TaskVault is AccessControl, ReentrancyGuard {
+    using SafeERC20 for IERC20;
 
     bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
@@ -245,9 +247,13 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         // Calculate points with multipliers
         uint256 earned = _calculatePoints(worker, basePoints, correct);
 
-        // Apply weekly cap
+        // Apply weekly cap. Guard against `cap < user.weeklyPoints` (which can happen
+        // if an admin lowers a cap mid-week) so this can never underflow and brick
+        // task completion for the affected users.
         uint256 cap = weeklyCaps[user.tierIndex];
-        if (user.weeklyPoints + earned > cap) {
+        if (user.weeklyPoints >= cap) {
+            earned = 0;
+        } else if (user.weeklyPoints + earned > cap) {
             earned = cap - user.weeklyPoints;
         }
 
@@ -377,7 +383,7 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         require(users[msg.sender].exists, "Not registered");
         require(amount > 0, "Zero amount");
 
-        usdg.transferFrom(msg.sender, address(this), amount);
+        usdg.safeTransferFrom(msg.sender, address(this), amount);
 
         User storage user = users[msg.sender];
         user.vaultBalance += amount;
@@ -389,10 +395,11 @@ contract TaskVault is AccessControl, ReentrancyGuard {
 
     function withdrawFromVault(uint256 amount) external nonReentrant {
         User storage user = users[msg.sender];
+        require(user.exists, "Not registered");
         require(user.vaultBalance >= amount, "Insufficient balance");
 
         user.vaultBalance -= amount;
-        usdg.transfer(msg.sender, amount);
+        usdg.safeTransfer(msg.sender, amount);
 
         _updateVaultMultiplier(msg.sender);
 
@@ -433,6 +440,11 @@ contract TaskVault is AccessControl, ReentrancyGuard {
             cancelled: false
         }));
 
+        // Streaming moves funds out of the vault balance, so the vault bonus tier
+        // must be recomputed — otherwise the user keeps a multiplier they no longer
+        // qualify for.
+        _updateVaultMultiplier(msg.sender);
+
         emit StreamCreated(msg.sender, userStreams[msg.sender].length - 1, amount, durationSeconds);
     }
 
@@ -446,7 +458,13 @@ contract TaskVault is AccessControl, ReentrancyGuard {
         require(claimable > 0, "Nothing to claim");
 
         stream.claimedAmount += claimable;
-        usdg.transfer(msg.sender, claimable);
+        usdg.safeTransfer(msg.sender, claimable);
+
+        // A stream that has paid out in full is no longer active. Decrement exactly
+        // once: once fully claimed, later calls revert with "Nothing to claim".
+        if (stream.claimedAmount >= stream.totalAmount) {
+            users[msg.sender].activeStreams--;
+        }
 
         emit StreamClaimed(msg.sender, streamIndex, claimable);
     }
@@ -464,11 +482,11 @@ contract TaskVault is AccessControl, ReentrancyGuard {
 
         if (claimable > 0) {
             stream.claimedAmount += claimable;
-            usdg.transfer(msg.sender, claimable);
+            usdg.safeTransfer(msg.sender, claimable);
         }
 
         if (forfeited > 0) {
-            usdg.transfer(treasury, forfeited);
+            usdg.safeTransfer(treasury, forfeited);
         }
 
         emit StreamCancelled(msg.sender, streamIndex, forfeited);

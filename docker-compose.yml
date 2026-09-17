@@ -1,32 +1,61 @@
-version: '3.8'
+# TaskVault full stack.
+#
+# Usage: docker compose up -d --build
+#
+# Configuration sources:
+#   * ${VAR} substitution below reads a repo-root .env file (VITE_* contract
+#     addresses, FRONTEND_URL, ...). See DEPLOYMENT.md → "Environment variables".
+#   * The backend and verifier services additionally load backend/.env through
+#     `env_file`. Values in `environment:` override env_file values. The
+#     `required: false` form needs Docker Compose v2.24+; on an older Compose
+#     create backend/.env (docs do) or use the plain `- ./backend/.env` form.
+#
+# `.env` files are gitignored; only `.env.example` templates are committed.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
-  # MongoDB
+  # MongoDB — internal only: no host port is published.
   mongodb:
     image: mongo:7
     container_name: taskvault-mongo
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     volumes:
       - mongo_data:/data/db
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: changeme
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - taskvault
+    logging: *default-logging
 
-  # Redis (for Bull queue)
+  # Redis — internal only: no host port is published and no password is set.
+  # Reserved for a future Bull queue; the backend does not use it yet.
   redis:
     image: redis:7-alpine
     container_name: taskvault-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - taskvault
+    logging: *default-logging
 
   # Backend API
   backend:
@@ -37,24 +66,39 @@ services:
     restart: unless-stopped
     ports:
       - "3001:3001"
+    env_file:
+      # Optional so a fresh clone still starts; copy backend/.env.example to
+      # backend/.env for real values.
+      - path: ./backend/.env
+        required: false
     environment:
-      - NODE_ENV=production
-      - PORT=3001
-      - MONGODB_URI=mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin
-      - REDIS_URL=redis://redis:6379
-      - RPC_URL=https://rpc.testnet.chain.robinhood.com
-      - VAULT_ADDRESS=${VAULT_ADDRESS}
-      - POINTS_ADDRESS=${POINTS_ADDRESS}
-      - PRIVATE_KEY=${PRIVATE_KEY}
-      - JWT_SECRET=${JWT_SECRET}
-      - ADMIN_WALLET=${ADMIN_WALLET}
+      # Service-internal values override anything in backend/.env.
+      # MONGODB_URI / REDIS_URL may be overridden from the repo-root .env
+      # (e.g. a MongoDB Atlas URI); otherwise the bundled services are used.
+      NODE_ENV: production
+      PORT: 3001
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      # Comma-separated allowed browser origin for CORS (frontend URL).
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
     depends_on:
-      - mongodb
-      - redis
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
-      - ./backend/logs:/app/logs
+      # Named volume (not a bind mount) so the image's node-owned permissions
+      # are preserved for the non-root runtime user.
+      - backend_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
       - taskvault
+    logging: *default-logging
 
   # Verifier Bot
   verifier:
@@ -63,38 +107,55 @@ services:
       dockerfile: Dockerfile.verifier
     container_name: taskvault-verifier
     restart: unless-stopped
+    env_file:
+      - path: ./backend/.env
+        required: false
     environment:
-      - NODE_ENV=production
-      - MONGODB_URI=mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin
-      - RPC_URL=https://rpc.testnet.chain.robinhood.com
-      - VAULT_ADDRESS=${VAULT_ADDRESS}
-      - POINTS_ADDRESS=${POINTS_ADDRESS}
-      - PRIVATE_KEY=${PRIVATE_KEY}
-      - ADMIN_WALLET=${ADMIN_WALLET}
+      # Service-internal values override anything in backend/.env.
+      NODE_ENV: production
+      MONGODB_URI: ${MONGODB_URI:-mongodb://admin:changeme@mongodb:27017/taskvault?authSource=admin}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     depends_on:
-      - mongodb
-      - backend
+      mongodb:
+        condition: service_healthy
+      backend:
+        condition: service_started
+      redis:
+        condition: service_started
     networks:
       - taskvault
+    logging: *default-logging
 
-  # Frontend (served via nginx)
+  # Frontend (static bundle served by unprivileged nginx on :8080)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # Sourced from the repo-root .env; inlined into the Vite bundle.
+        VITE_VAULT_ADDRESS: ${VITE_VAULT_ADDRESS:-}
+        VITE_USDG_ADDRESS: ${VITE_USDG_ADDRESS:-}
+        VITE_ROBINHOOD_TESTNET_RPC: ${VITE_ROBINHOOD_TESTNET_RPC:-https://rpc.testnet.chain.robinhood.com}
     container_name: taskvault-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      # Host 80 -> container 8080 (unprivileged nginx).
+      - "80:8080"
+      # TLS is not terminated by this stack. To add HTTPS, mount certificates
+      # into the frontend service and add a `listen 8443 ssl;` server block to
+      # frontend/nginx.conf, then publish the port:
+      # - "443:8443"
     depends_on:
-      - backend
+      backend:
+        condition: service_started
     networks:
       - taskvault
+    logging: *default-logging
 
 volumes:
   mongo_data:
   redis_data:
+  backend_logs:
 
 networks:
   taskvault:

@@ -1,0 +1,18 @@
+# Excluded from the Docker build context (context = ./frontend).
+node_modules
+dist
+build
+
+# Never bake local env files into the bundle; VITE_* values are injected as
+# build args in docker-compose.yml. .env.example is harmless but unused.
+.env
+.env.*
+!.env.example
+
+npm-debug.log*
+*.log
+coverage
+
+.git
+.github
+.DS_Store

@@ -97,7 +97,7 @@ class VerificationService {
 
     await User.updateOne(
       { walletAddress: submission.userAddress },
-      { $set: { strikes, banned, lastFlagged: new Date() } },
+      { $set: flags.length > 0 ? { strikes, banned, lastFlagged: new Date() } : { strikes, banned } },
       { upsert: true }
     );
 

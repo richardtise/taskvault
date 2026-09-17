@@ -1,7 +1,8 @@
 # Foundry
 /cache/
 /out/
-/lib/
+# NOTE: /lib/ is intentionally NOT ignored. Dependencies are committed as git
+# submodules (see .gitmodules) so `forge build` is reproducible from a clean clone.
 
 # Env
 .env

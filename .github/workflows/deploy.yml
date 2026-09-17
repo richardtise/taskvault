@@ -1,26 +1,43 @@
 name: Deploy
 
+# Deployment is gated on CI: this workflow fires only after the "CI" workflow
+# (ci.yml) completes successfully on main. Previously deploy.yml used
+# `needs: [test-contracts, ...]`, but `needs` can only reference jobs in the
+# same file, so that workflow always errored.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    needs: [test-contracts, test-backend, test-frontend]
-
     steps:
-      - uses: actions/checkout@v4
-
       - name: Deploy to server
-        uses: appleboy/ssh-action@master
+        uses: appleboy/ssh-action@v1.2.1
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd /opt/taskvault
-            git pull origin main
-            docker-compose down
-            docker-compose up -d --build
-            docker system prune -f
+            # .env files are gitignored and untracked on the server, so they
+            # survive the hard reset. Never use a bare `git pull`: it can
+            # conflict with local files, and `git clean` would delete .env.
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose build
+            docker compose up -d --remove-orphans
+            docker image prune -f

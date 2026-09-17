@@ -108,11 +108,20 @@ function claimStream(uint256 streamIndex) external
 function cancelStream(uint256 streamIndex) external
 ```
 
-#### Admin
+#### Admin — DEFAULT_ADMIN_ROLE
+```solidity
+function setTreasury(address treasury) external
+function addVerifier(address verifier) external
+function removeVerifier(address verifier) external
+```
+These are gated on `DEFAULT_ADMIN_ROLE`, not `ADMIN_ROLE`.
+
+#### Admin — ADMIN_ROLE
 ```solidity
 function inviteArchitect(address user) external
-function addVerifier(address verifier) external
 function registerModality(bytes32 modalityHash, string memory name) external
+function setWeeklyCap(uint8 tier, uint256 cap) external
+function setVaultThresholds(uint256[4] memory thresholds, uint256[4] memory bonuses) external
 function setBadgeThresholds(uint256[4] memory tasks, uint256[4] memory accuracy) external
 ```
 
@@ -122,7 +131,7 @@ function setBadgeThresholds(uint256[4] memory tasks, uint256[4] memory accuracy)
 |----------|---------------|
 | Weekly caps | Per-tier limit, resets every 7 days |
 | Accuracy penalty | Below 70% → 50% point reduction |
-| Referral fraud | 10-task gate before referrer earns (enforced off-chain in UI) |
+| Referral bonus | 5% (`REFERRAL_SHARE_BP = 500`) of each completion's points credited to the referrer immediately — there is no task-count gate |
 | Self-referral | Blocked in contract |
 | Max referrals | 50 per wallet |
 
@@ -147,8 +156,8 @@ event ModalityRegistered(bytes32 indexed modality, string name);
 
 | Role | Holders | Powers |
 |------|---------|--------|
-| DEFAULT_ADMIN_ROLE | Deployer | Everything |
-| ADMIN_ROLE | Deployer | Invite architects, set caps/thresholds, register modalities |
+| DEFAULT_ADMIN_ROLE | Deployer | Grant/revoke roles, `addVerifier` / `removeVerifier`, `setTreasury`, everything |
+| ADMIN_ROLE | Deployer | Invite architects, set weekly caps / vault & badge thresholds, register modalities |
 | VERIFIER_ROLE | Deployer + bots | Complete tasks, mint points |
 | MINTER_ROLE | TaskVault contract | Mint TVP points |
 | BURNER_ROLE | TaskVault contract | Burn TVP points |

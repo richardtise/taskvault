@@ -1,21 +1,25 @@
+'use strict';
+
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { requireEnv } = require('../config/env');
 const logger = require('../utils/logger');
 
 const getAdminWallets = () =>
   (process.env.ADMIN_WALLETS || process.env.ADMIN_WALLET || '')
     .split(',')
-    .map(w => w.trim().toLowerCase())
+    .map((w) => w.trim().toLowerCase())
     .filter(Boolean);
 
 const authMiddleware = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
+    const header = req.headers.authorization || '';
+    const match = /^Bearer\s+(.+)$/i.exec(header);
+    if (!match) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(match[1], requireEnv('JWT_SECRET'));
     const user = await User.findOne({ walletAddress: decoded.walletAddress });
 
     if (!user) {
@@ -40,7 +44,7 @@ const adminMiddleware = async (req, res, next) => {
     logger.error('ADMIN_WALLET(S) not configured');
     return res.status(500).json({ error: 'Server misconfigured' });
   }
-  if (!admins.includes(req.user.walletAddress.toLowerCase())) {
+  if (!req.user || !admins.includes(req.user.walletAddress.toLowerCase())) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();

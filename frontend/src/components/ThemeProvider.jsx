@@ -1,23 +1,29 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { THEMES } from '../themes';
 
 const ThemeContext = createContext();
 
 export function ThemeProvider({ children }) {
   const [currentTheme, setCurrentTheme] = useState('default');
-  const [previousTheme, setPreviousTheme] = useState('default');
+  const previousThemeRef = useRef('default');
 
-  const setTheme = (themeKey) => {
+  // Memoised so consumers can safely list setTheme/resetTheme in effect deps
+  // without re-running the effect on every provider render.
+  const setTheme = useCallback((themeKey) => {
     if (THEMES[themeKey]) {
-      setPreviousTheme(currentTheme);
-      setCurrentTheme(themeKey);
+      setCurrentTheme((prev) => {
+        previousThemeRef.current = prev;
+        return themeKey;
+      });
     }
-  };
+  }, []);
 
-  const resetTheme = () => {
-    setPreviousTheme(currentTheme);
-    setCurrentTheme('default');
-  };
+  const resetTheme = useCallback(() => {
+    setCurrentTheme((prev) => {
+      previousThemeRef.current = prev;
+      return 'default';
+    });
+  }, []);
 
   useEffect(() => {
     const theme = THEMES[currentTheme];
@@ -48,7 +54,7 @@ export function ThemeProvider({ children }) {
   }, [currentTheme]);
 
   return (
-    <ThemeContext.Provider value={{ currentTheme, setTheme, resetTheme, previousTheme }}>
+    <ThemeContext.Provider value={{ currentTheme, setTheme, resetTheme, previousTheme: previousThemeRef.current }}>
       {children}
     </ThemeContext.Provider>
   );

@@ -9,6 +9,7 @@ const UserSchema = new mongoose.Schema({
 
   // Wallet-login nonce (rotated on every successful auth)
   authNonce: { type: String },
+  authNonceExpiresAt: { type: Date },
 
   // On-chain sync (cached for fast queries)
   tierIndex: { type: Number, default: 0 },
@@ -55,7 +56,8 @@ const UserSchema = new mongoose.Schema({
   lastSynced: { type: Date, default: Date.now },
 });
 
-UserSchema.index({ walletAddress: 1 });
+// `walletAddress` is already indexed by `unique: true` above; declaring it again
+// here produced a duplicate-index warning on every boot.
 UserSchema.index({ tierIndex: -1, totalPoints: -1 });
 UserSchema.index({ lifetimeEarned: -1 });
 UserSchema.index({ weeklyPoints: -1 });

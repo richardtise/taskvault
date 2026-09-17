@@ -173,7 +173,17 @@ export const THEMES = {
   }
 };
 
+// Maps a backend task `category` (or legacy category id) to a visual theme.
 export const TASK_GENRES = {
+  // Backend categories (Task.category in the API)
+  llm: 'llm',
+  robotics: 'robotics',
+  vision: 'vision',
+  audio: 'audio',
+  writing: 'writing',
+  safety: 'safety',
+  medical: 'default',
+  // Legacy category ids
   'llm-rank': 'llm',
   'robot-phase': 'robotics',
   'grasp-annotate': 'robotics',
@@ -183,3 +193,22 @@ export const TASK_GENRES = {
   'writing-eval': 'writing',
   'audio-transcribe': 'audio',
 };
+
+/**
+ * Resolve the visual theme name for a real backend task.
+ * Prefers the task's own `genre`, then its `category`, then the taskId prefix,
+ * finally falling back to the default theme. Never throws.
+ */
+export function resolveGenre(task) {
+  if (!task) return 'default';
+  if (task.genre && THEMES[task.genre]) return task.genre;
+  const category = task.category || task.id;
+  if (category && TASK_GENRES[category] && THEMES[TASK_GENRES[category]]) {
+    return TASK_GENRES[category];
+  }
+  if (task.taskId) {
+    const prefix = String(task.taskId).split('-')[0];
+    if (TASK_GENRES[prefix] && THEMES[TASK_GENRES[prefix]]) return TASK_GENRES[prefix];
+  }
+  return 'default';
+}

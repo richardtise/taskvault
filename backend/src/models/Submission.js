@@ -35,9 +35,12 @@ const SubmissionSchema = new mongoose.Schema({
   // Review
   status: { 
     type: String, 
-    enum: ['pending', 'under_review', 'approved', 'rejected', 'disputed'],
+    enum: ['pending', 'under_review', 'approved', 'rejected', 'disputed', 'failed'],
     default: 'pending'
   },
+
+  // Number of failed on-chain mint attempts (bounded retry, see verifierBot).
+  chainAttempts: { type: Number, default: 0 },
 
   // Verification
   verifierAddress: { type: String, lowercase: true },

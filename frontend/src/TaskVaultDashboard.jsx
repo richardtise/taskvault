@@ -5,12 +5,14 @@ import {
   useUserInfo, useUSDGBalance,
   useRegister,
   useVaultDeposit, useVaultWithdraw, useCreateStream,
-  useAllBadges,
+  useAllBadges, useTasks, useAuth,
   formatPoints, formatUSDG, captureReferrer, getReferralLink,
   formatModality, badgeLevelName, badgeLevelColor
 } from './hooks'
 import TaskInterface from './components/TaskInterface'
 import { robinhoodTestnet } from './wagmi-config'
+import { CONFIG_ERROR, isConfigured } from './config'
+import { resolveGenre } from './themes'
 
 const TIERS = [
   { name: 'Scout', tasks: 0, accuracy: 0, multiplier: 1.0, color: '#00d4aa', icon: '🔭' },
@@ -20,88 +22,16 @@ const TIERS = [
   { name: 'Architect', tasks: 'Invite', accuracy: 98, multiplier: 6.0, color: '#e0e0e0', icon: '🏛️' },
 ]
 
-const TASK_CATEGORIES = [
-  {
-    id: 'llm-rank',
-    title: 'LLM Response Ranking',
-    desc: 'Compare two AI responses and pick the better one.',
-    pay: '15 pts',
-    difficulty: 'Easy',
-    icon: '🤖',
-    color: '#a78bfa',
-    available: 124,
-  },
-  {
-    id: 'robot-phase',
-    title: 'Robot Video Phase Labeling',
-    desc: 'Mark timestamps where robot actions begin and end.',
-    pay: '80 pts',
-    difficulty: 'Medium',
-    icon: '🦾',
-    color: '#ff9f1c',
-    available: 45,
-  },
-  {
-    id: 'grasp-annotate',
-    title: 'Grasp Outcome Classification',
-    desc: 'Label robot grasp attempts as success, slip, or collision.',
-    pay: '60 pts',
-    difficulty: 'Medium',
-    icon: '✋',
-    color: '#ff9f1c',
-    available: 89,
-  },
-  {
-    id: 'safety-redteam',
-    title: 'Safety Red-Teaming',
-    desc: 'Find prompts that make AI models produce unsafe outputs.',
-    pay: '200 pts',
-    difficulty: 'Hard',
-    icon: '🛡️',
-    color: '#ef4444',
-    available: 12,
-  },
-  {
-    id: 'human-demo',
-    title: 'Human Demonstration Videos',
-    desc: 'Film yourself doing household tasks (folding, tools, etc).',
-    pay: '150 pts',
-    difficulty: 'Easy',
-    icon: '📹',
-    color: '#f43f5e',
-    available: 200,
-  },
-  {
-    id: 'vision-label',
-    title: 'Industrial Visual Inspection',
-    desc: 'Mark defects on circuit board and weld images.',
-    pay: '25 pts',
-    difficulty: 'Easy',
-    icon: '🔍',
-    color: '#f43f5e',
-    available: 340,
-  },
-  {
-    id: 'writing-eval',
-    title: 'Writing Quality Evaluation',
-    desc: 'Rate and improve technical writing samples.',
-    pay: '35 pts',
-    difficulty: 'Easy',
-    icon: '✍️',
-    color: '#1c1917',
-    available: 156,
-  },
-  {
-    id: 'audio-transcribe',
-    title: 'Audio Transcription Review',
-    desc: 'Verify and correct AI-generated transcripts.',
-    pay: '20 pts',
-    difficulty: 'Easy',
-    icon: '🎧',
-    color: '#4ade80',
-    available: 278,
-  },
-]
+// Visual treatment per theme genre (see themes.js resolveGenre).
+const GENRE_VISUALS = {
+  llm: { icon: '🤖', color: '#a78bfa' },
+  robotics: { icon: '🦾', color: '#ff9f1c' },
+  vision: { icon: '🔍', color: '#f43f5e' },
+  audio: { icon: '🎧', color: '#4ade80' },
+  writing: { icon: '✍️', color: '#1c1917' },
+  safety: { icon: '🛡️', color: '#ef4444' },
+  default: { icon: '📋', color: 'var(--tv-accent)' },
+}
 
 const STREAM_PERIODS = [
   { label: '3 Months', months: 3, apr: '8%', multiplier: '1.1x' },
@@ -131,9 +61,12 @@ export default function TaskVaultDashboard() {
   const { data: allBadges } = useAllBadges(address)
 
   const { register, isPending: isRegistering, error: registerError } = useRegister()
-  const { deposit, isPending: isDepositing } = useVaultDeposit()
-  const { withdraw, isPending: isWithdrawing } = useVaultWithdraw()
-  const { createStream, isPending: isStreaming } = useCreateStream()
+  const { deposit, isPending: isDepositing, error: depositError, status: depositStatus } = useVaultDeposit()
+  const { withdraw, isPending: isWithdrawing, error: withdrawError } = useVaultWithdraw()
+  const { createStream, isPending: isStreaming, error: streamError } = useCreateStream()
+
+  const { tasks, isLoading: tasksLoading, error: tasksError, refetch: refetchTasks } = useTasks(address)
+  const { isAuthenticated, authenticate, authError, isAuthenticating } = useAuth()
 
   const [activeTab, setActiveTab] = useState('tasks')
   const [referrer, setReferrer] = useState('')
@@ -154,8 +87,11 @@ export default function TaskVaultDashboard() {
   const isRegistered = userInfo?.exists
   const currentTier = userInfo ? TIERS[userInfo.tierIndex] : null
   const isWrongChain = chainId !== targetChainId
+  // On-chain writes need both the right network and deployed contract addresses.
+  const chainWriteDisabled = isWrongChain || !isConfigured
 
   const handleRegister = () => {
+    if (chainWriteDisabled) return
     const ref = referrer || '0x0000000000000000000000000000000000000000'
     register(ref)
   }
@@ -167,26 +103,35 @@ export default function TaskVaultDashboard() {
   }
 
   const handleStartTask = (task) => {
+    if (isWrongChain) return
     setSelectedTask(task)
   }
 
-  const handleDeposit = () => {
-    if (depositAmount) deposit(Number(depositAmount))
+  const handleDeposit = async () => {
+    if (!depositAmount) return
+    try { await deposit(depositAmount) } catch { /* surfaced via depositError */ }
   }
 
-  const handleWithdraw = () => {
-    if (withdrawAmount) withdraw(Number(withdrawAmount))
+  const handleWithdraw = async () => {
+    if (!withdrawAmount) return
+    try { await withdraw(withdrawAmount) } catch { /* surfaced via withdrawError */ }
   }
 
-  const handleCreateStream = () => {
-    if (streamAmount && STREAM_PERIODS[streamPeriod]) {
-      const seconds = STREAM_PERIODS[streamPeriod].months * 30 * 24 * 60 * 60
-      createStream(Number(streamAmount), seconds)
-    }
+  const handleCreateStream = async () => {
+    if (!streamAmount || !STREAM_PERIODS[streamPeriod]) return
+    const seconds = STREAM_PERIODS[streamPeriod].months * 30 * 24 * 60 * 60
+    try { await createStream(streamAmount, seconds) } catch { /* surfaced via streamError */ }
   }
 
   if (selectedTask) {
-    return <TaskInterface task={selectedTask} onClose={() => setSelectedTask(null)} />
+    return (
+      <TaskInterface
+        task={selectedTask}
+        onClose={() => setSelectedTask(null)}
+        authenticate={authenticate}
+        isAuthenticated={isAuthenticated}
+      />
+    )
   }
 
   if (userLoading) {
@@ -268,6 +213,31 @@ export default function TaskVaultDashboard() {
         </div>
       )}
 
+      {CONFIG_ERROR && (
+        <div className="error-banner" style={{ margin: '0 24px 16px' }}>
+          {CONFIG_ERROR} On-chain actions are disabled until valid addresses are provided.
+        </div>
+      )}
+
+      {authError && (
+        <div className="error-banner" style={{ margin: '0 24px 16px' }}>
+          Wallet sign-in failed: {authError.message}{' '}
+          <button
+            className="btn-secondary"
+            onClick={() => { authenticate().catch(() => {}) }}
+            disabled={isAuthenticating}
+          >
+            {isAuthenticating ? 'Signing in...' : 'Retry sign-in'}
+          </button>
+        </div>
+      )}
+
+      {!isAuthenticated && !authError && isAuthenticating && (
+        <div className="chain-banner">
+          <span>Signing in with your wallet — confirm the signature request to submit tasks.</span>
+        </div>
+      )}
+
       <main className="dashboard-content">
 
         {activeTab === 'tasks' && (
@@ -309,7 +279,7 @@ export default function TaskVaultDashboard() {
 
                 <button
                   onClick={handleRegister}
-                  disabled={isRegistering || isWrongChain}
+                  disabled={isRegistering || chainWriteDisabled}
                   className="btn-primary lg register-btn"
                 >
                   {isRegistering ? 'Registering...' : 'Register Free → Start Earning'}
@@ -330,31 +300,66 @@ export default function TaskVaultDashboard() {
                 <p>Complete tasks to earn points. Higher tiers unlock higher-value work.</p>
               </div>
 
-              <div className="task-grid">
-                {TASK_CATEGORIES.map(task => (
-                  <div 
-                    key={task.id} 
-                    className="task-card"
-                    onClick={() => handleStartTask(task)}
-                  >
-                    <div className="task-card-header">
-                      <div className="task-icon" style={{ color: task.color }}>
-                        {task.icon}
+              {tasksLoading && (
+                <div className="task-grid">
+                  {[1, 2, 3, 4, 5, 6].map(i => <SkeletonCard key={i} />)}
+                </div>
+              )}
+
+              {!tasksLoading && tasksError && (
+                <div className="empty-state">
+                  <div className="empty-icon">⚠️</div>
+                  <h3>Could not load tasks</h3>
+                  <p>{tasksError.message || 'Failed to fetch tasks from the server.'}</p>
+                  <button className="btn-primary" onClick={refetchTasks}>Retry</button>
+                </div>
+              )}
+
+              {!tasksLoading && !tasksError && tasks.length === 0 && (
+                <div className="empty-state">
+                  <div className="empty-icon">📭</div>
+                  <h3>No tasks available</h3>
+                  <p>There are no active tasks for your account right now. Check back soon.</p>
+                </div>
+              )}
+
+              {!tasksLoading && !tasksError && tasks.length > 0 && (
+                <div className="task-grid">
+                  {tasks.map(task => {
+                    const genre = resolveGenre(task)
+                    const visual = GENRE_VISUALS[genre] || GENRE_VISUALS.default
+                    const remaining = typeof task.maxCompletions === 'number' && typeof task.currentCompletions === 'number'
+                      ? Math.max(task.maxCompletions - task.currentCompletions, 0)
+                      : null
+                    const difficulty = task.difficulty || 'Easy'
+                    return (
+                      <div
+                        key={task.taskId || task._id}
+                        className="task-card"
+                        onClick={() => handleStartTask(task)}
+                      >
+                        <div className="task-card-header">
+                          <div className="task-icon" style={{ color: visual.color }}>
+                            {visual.icon}
+                          </div>
+                          {remaining !== null && (
+                            <div className="task-available">{remaining} available</div>
+                          )}
+                        </div>
+                        <h4 className="task-title">{task.title}</h4>
+                        <p className="task-desc">{task.description}</p>
+                        <div className="task-meta">
+                          <span className="task-pay">{task.basePoints ?? 0} pts</span>
+                          <span className={`task-difficulty ${difficulty.toLowerCase()}`}>{difficulty}</span>
+                        </div>
+                        <button className="btn-primary task-btn" disabled={isWrongChain}>
+                          {isWrongChain ? 'Wrong Network' : 'Start Task →'}
+                        </button>
                       </div>
-                      <div className="task-available">{task.available} available</div>
-                    </div>
-                    <h4 className="task-title">{task.title}</h4>
-                    <p className="task-desc">{task.desc}</p>
-                    <div className="task-meta">
-                      <span className="task-pay">{task.pay}</span>
-                      <span className={`task-difficulty ${task.difficulty.toLowerCase()}`}>{task.difficulty}</span>
-                    </div>
-                    <button className="btn-primary task-btn">
-                      Start Task →
-                    </button>
-                  </div>
-                ))}
-              </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {isRegistered && (
@@ -505,7 +510,7 @@ export default function TaskVaultDashboard() {
               </div>
               <div className="stat-item">
                 <div className="stat-label">Current Bonus</div>
-                <div className="stat-value">+{userInfo?.vaultMultiplier ? (userInfo.vaultMultiplier / 100).toFixed(2) : '0.00'}x</div>
+                <div className="stat-value">+{userInfo?.vaultMultiplier ? (Number(userInfo.vaultMultiplier) / 10000).toFixed(2) : '0.00'}x</div>
               </div>
             </div>
 
@@ -532,14 +537,24 @@ export default function TaskVaultDashboard() {
                     outline: 'none',
                   }}
                 />
+                {depositError && (
+                  <div className="error-banner">Deposit failed: {depositError.message}</div>
+                )}
                 <button 
                   onClick={handleDeposit}
-                  disabled={isDepositing || !depositAmount}
+                  disabled={isDepositing || !depositAmount || chainWriteDisabled}
                   className="btn-primary"
                   style={{ width: '100%' }}
                 >
-                  {isDepositing ? 'Depositing...' : 'Deposit USDG'}
+                  {isDepositing
+                    ? (depositStatus === 'approving' ? 'Approving USDG...' : 'Depositing...')
+                    : 'Deposit USDG'}
                 </button>
+                {isWrongChain && (
+                  <p style={{ marginTop: 8, fontSize: 12, color: 'var(--tv-warning)' }}>
+                    Switch to {robinhoodTestnet.name} to deposit.
+                  </p>
+                )}
               </div>
 
               <div className="info-card">
@@ -564,14 +579,22 @@ export default function TaskVaultDashboard() {
                     outline: 'none',
                   }}
                 />
+                {withdrawError && (
+                  <div className="error-banner">Withdrawal failed: {withdrawError.message}</div>
+                )}
                 <button 
                   onClick={handleWithdraw}
-                  disabled={isWithdrawing || !withdrawAmount}
+                  disabled={isWithdrawing || !withdrawAmount || chainWriteDisabled}
                   className="btn-secondary"
                   style={{ width: '100%' }}
                 >
                   {isWithdrawing ? 'Withdrawing...' : 'Withdraw USDG'}
                 </button>
+                {isWrongChain && (
+                  <p style={{ marginTop: 8, fontSize: 12, color: 'var(--tv-warning)' }}>
+                    Switch to {robinhoodTestnet.name} to withdraw.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -624,14 +647,22 @@ export default function TaskVaultDashboard() {
                   outline: 'none',
                 }}
               />
+              {streamError && (
+                <div className="error-banner">Stream creation failed: {streamError.message}</div>
+              )}
               <button 
                 onClick={handleCreateStream}
-                disabled={isStreaming || !streamAmount}
+                disabled={isStreaming || !streamAmount || chainWriteDisabled}
                 className="btn-primary"
                 style={{ width: '100%' }}
               >
                 {isStreaming ? 'Creating Stream...' : `Create ${STREAM_PERIODS[streamPeriod]?.label} Stream`}
               </button>
+              {isWrongChain && (
+                <p style={{ marginTop: 8, fontSize: 12, color: 'var(--tv-warning)' }}>
+                  Switch to {robinhoodTestnet.name} to create a stream.
+                </p>
+              )}
             </div>
           </div>  
         )}

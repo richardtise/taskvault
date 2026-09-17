@@ -1,0 +1,17 @@
+# Excluded from the Docker build context (context = ./backend).
+node_modules
+logs
+
+# Local env files must never be baked into the image. Runtime config is loaded
+# via env_file / environment in docker-compose.yml.
+.env
+.env.*
+!.env.example
+
+npm-debug.log*
+*.log
+coverage
+
+.dockerignore
+.git
+.DS_Store

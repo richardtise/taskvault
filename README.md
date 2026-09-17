@@ -41,6 +41,7 @@ taskavault-fullstack/
 │   │   └── wagmi-config.js        # Robinhood Chain config
 │   ├── package.json
 │   ├── Dockerfile
+│   ├── nginx.conf         # Reverse proxy config (baked into the image)
 │   └── .env.example
 │
 ├── backend/               # Node.js + Express + MongoDB
@@ -55,44 +56,44 @@ taskavault-fullstack/
 │   │   │   ├── users.js           # Auth, profile, leaderboard
 │   │   │   └── admin.js           # Task creation, review, analytics
 │   │   ├── services/
-│   │   │   ├── blockchain.js      # Ethers.js contract interaction
-│   │   │   └── ipfs.js            # File upload to IPFS
+│   │   │   ├── blockchain.js      # Ethers.js contract interaction (lazy, modality hashing)
+│   │   │   └── verification.js    # Anti-gaming heuristics + reputation
+│   │   ├── config/
+│   │   │   └── env.js             # Validated environment access
+│   │   ├── constants/
+│   │   │   └── taskCategories.js  # Canonical categories + modalities
 │   │   ├── middleware/
 │   │   │   └── auth.js            # JWT + admin verification
 │   │   ├── utils/
-│   │   │   └── logger.js          # Winston logging
+│   │   │   ├── logger.js          # Winston logging
+│   │   │   └── pagination.js      # Clamped page/limit parsing
 │   │   ├── scripts/
 │   │   │   ├── verifierBot.js     # Automated task verification
 │   │   │   └── seed.js            # Sample task seeding
 │   │   └── index.js               # Express server
+│   ├── tests/                     # Jest unit tests (`npm test`)
 │   ├── package.json
 │   ├── Dockerfile
 │   ├── Dockerfile.verifier
 │   └── .env.example
 │
-├── contracts/             # Foundry + Hardhat (both included)
+├── contracts/             # Foundry (single supported toolchain)
 │   ├── src/
 │   │   ├── TaskVaultPoints.sol    # Soulbound ERC20 point token
-│   │   └── TaskVault.sol          # Main contract (tiers + badges + vault)
+│   │   ├── TaskVault.sol          # Main contract (tiers + badges + vault)
+│   │   └── mocks/MockUSDG.sol     # 6-decimal test USDG
 │   ├── script/
 │   │   └── Deploy.s.sol           # Foundry deployment
 │   ├── test/
-│   │   └── TaskVault.t.sol        # Foundry tests (20+ tests)
-│   ├── hardhat/                   # Alternative Hardhat setup
-│   │   ├── hardhat.config.js
-│   │   ├── package.json
-│   │   ├── scripts/deploy.js
-│   │   ├── test/TaskVault.js
-│   │   └── .env.example
-│   ├── foundry.toml
+│   │   └── TaskVault.t.sol        # Foundry test suite (`forge test`)
+│   ├── lib/                       # git submodules: OpenZeppelin v5.0.2, forge-std
+│   ├── remappings.txt
+│   ├── foundry.toml               # pins solc 0.8.33, via_ir
 │   └── .env.example
-│
-├── nginx/                 # Reverse proxy config
-│   └── nginx.conf
 │
 ├── .github/workflows/     # CI/CD
 │   ├── ci.yml             # Run tests on PR
-│   └── deploy.yml         # Auto-deploy on merge
+│   └── deploy.yml         # Auto-deploy after CI passes on main
 │
 ├── docker-compose.yml     # One-command local stack
 ├── DEPLOYMENT.md          # Step-by-step deploy guide
@@ -109,36 +110,46 @@ taskavault-fullstack/
 cd taskavault-fullstack
 
 # 2. Set environment
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
-cp contracts/.env.example contracts/.env
-# Edit all three .env files
+cp backend/.env.example backend/.env        # loaded by backend + verifier (env_file)
+cp contracts/.env.example contracts/.env    # only needed to deploy contracts
+# Create a repo-root .env for `docker compose` ${VAR} substitution:
+cat > .env << 'EOF'
+VITE_VAULT_ADDRESS=0x...
+VITE_USDG_ADDRESS=0x...
+VITE_ROBINHOOD_TESTNET_RPC=https://rpc.testnet.chain.robinhood.com
+FRONTEND_URL=http://localhost
+EOF
+# frontend/.env is only used by `npm run dev` (Vite); the Docker image receives
+# its VITE_* values as build args from the root .env above.
+# See DEPLOYMENT.md → "Environment variables" for the full list.
 
-# 3. Spin up everything
-docker-compose up -d
+# 3. Spin up everything (Docker Compose v2)
+docker compose up -d --build
 
 # 4. Seed sample tasks
-docker-compose exec backend npm run seed
+docker compose exec backend npm run seed
 
-# 5. Start verifier bot
-docker-compose exec backend npm run verifier
+# 5. Tail the verifier bot (Compose starts it as the `verifier` service)
+docker compose logs -f verifier
 ```
 
 Services will be available at:
-- Frontend: http://localhost
+- Frontend: http://localhost (host 80 → unprivileged nginx on 8080)
 - API: http://localhost/api
-- MongoDB: localhost:27017
-- Redis: localhost:6379
+- MongoDB: internal to the Compose network only (no host port)
+- Redis: internal to the Compose network only (no host port)
 
 ### Manual Development
 
 **Contracts:**
 ```bash
+git submodule update --init --recursive   # contracts/lib deps are committed submodules
 cd contracts
-forge install OpenZeppelin/openzeppelin-contracts
 forge test
 cp .env.example .env
 # Edit .env
+# NOTE: the public Robinhood Chain RPCs are rate-limited and are not suitable
+# for production traffic — use a dedicated provider key/endpoint.
 forge script script/Deploy.s.sol:Deploy --rpc-url $ROBINHOOD_TESTNET_RPC --broadcast --verify
 ```
 
@@ -175,18 +186,27 @@ npm run dev          # Dev server on :5173
 ### Users
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/users/auth` | No | Authenticate wallet, sync from chain |
+| POST | `/api/users/auth/nonce` | No | Get a single-use, expiring nonce to sign |
+| POST | `/api/users/auth` | No | Verify wallet signature, sync from chain, return JWT |
 | GET | `/api/users/me` | Yes | Get profile + recent submissions |
 | GET | `/api/users/leaderboard` | No | Get leaderboard (all/week/month) |
 | PATCH | `/api/users/profile` | Yes | Update profile |
 
+### Appeals
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/appeals/:submissionId` | Yes | Appeal a rejection (7-day window) |
+| GET | `/api/appeals/my` | Yes | List my appeals |
+
 ### Admin
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/admin/tasks` | Admin | Create new task |
+| POST | `/api/admin/tasks` | Admin | Create new task (validated, starts as draft) |
+| PATCH | `/api/admin/tasks/:taskId/status` | Admin | Activate/pause/archive a task |
 | GET | `/api/admin/submissions/pending` | Admin | List pending reviews |
 | POST | `/api/admin/submissions/:id/review` | Admin | Approve/reject + mint points |
 | GET | `/api/admin/analytics` | Admin | Platform metrics |
+| POST | `/api/admin/appeals/:submissionId/resolve` | Admin | Resolve an appeal (mints on overturn) |
 | POST | `/api/admin/sync-user` | Admin | Force sync user from chain |
 
 ## Key Features
@@ -202,7 +222,6 @@ npm run dev          # Dev server on :5173
 - **Weekly caps** — prevents point inflation
 - **Accuracy penalties** — stops bot farms
 - **Verifier bot** — automated approval for simple tasks
-- **IPFS storage** — task assets stored decentrally
 - **Admin dashboard** — analytics, task creation, review queue
 
 ## Rank System
@@ -230,11 +249,11 @@ npm run dev          # Dev server on :5173
 
 | Layer | Tech |
 |-------|------|
-| Blockchain | Robinhood Chain (EVM, ID 4663/46630) |
-| Smart Contracts | Solidity 0.8.20, OpenZeppelin, Foundry/Hardhat |
+| Blockchain | Robinhood Chain (EVM, testnet chainId 46630; use a dedicated RPC provider for production) |
+| Smart Contracts | Solidity 0.8.33 (pinned), OpenZeppelin v5.0.2, Foundry |
 | Frontend | React 18, Vite, RainbowKit, wagmi v2, TanStack Query |
-| Backend | Node.js 20, Express 4, MongoDB 7, Redis 7 |
-| File Storage | IPFS (Infura/Pinata) |
+| Backend | Node.js 20, Express 4, MongoDB 7 (a Redis 7 container is bundled but not yet used by backend code) |
+| File Storage | Not implemented — `Submission.files` is reserved; no upload route exists yet |
 | Deployment | Docker, Docker Compose, GitHub Actions |
 | Reverse Proxy | nginx |
 
